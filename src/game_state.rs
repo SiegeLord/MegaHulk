@@ -36,7 +36,10 @@ impl Into<i32> for MaterialKind
 #[derive(PartialEq, Eq, Hash, Serialize, Deserialize, Copy, Clone, Debug, PartialOrd, Ord)]
 pub enum Action
 {
-	Move,
+	MoveLeft,
+	MoveRight,
+	MoveUp,
+	MoveDown,
 }
 
 impl controls::Action for Action
@@ -45,7 +48,10 @@ impl controls::Action for Action
 	{
 		match self
 		{
-			Action::Move => "Move",
+			Action::MoveLeft => "Left",
+			Action::MoveRight => "Right",
+			Action::MoveUp => "Up",
+			Action::MoveDown => "Down",
 		}
 	}
 }
@@ -54,11 +60,20 @@ pub fn new_game_controls() -> controls::Controls<Action>
 {
 	let mut action_to_inputs = BTreeMap::new();
 	action_to_inputs.insert(
-		Action::Move,
-		[
-			Some(controls::Input::Keyboard(allegro::KeyCode::Space)),
-			None,
-		],
+		Action::MoveLeft,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::A)), None],
+	);
+	action_to_inputs.insert(
+		Action::MoveRight,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::D)), None],
+	);
+	action_to_inputs.insert(
+		Action::MoveUp,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::W)), None],
+	);
+	action_to_inputs.insert(
+		Action::MoveDown,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::S)), None],
 	);
 	controls::Controls::new(action_to_inputs)
 }
@@ -81,7 +96,7 @@ impl Default for Options
 	{
 		Self {
 			gfx: hack_state::GfxOptions {
-				fullscreen: true,
+				fullscreen: false,
 				width: 960,
 				height: 864,
 				vsync_method: if cfg!(target_os = "windows") { 1 } else { 2 },

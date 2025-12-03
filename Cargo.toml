@@ -43,6 +43,7 @@ gltf = { version="1.0.0", features = ["KHR_lights_punctual"] }
 gl = "0.14.0"
 gl_loader = "0.1.2"
 memoffset = "0.9.1"
+rapier3d = "0.29.0"
 
 [profile.release]
 debug = true

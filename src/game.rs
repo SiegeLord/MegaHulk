@@ -4,15 +4,127 @@ use crate::{components as comps, game_state, ui, utils};
 use allegro::*;
 use allegro_font::*;
 use na::{
-	Isometry3, Matrix4, Perspective3, Point2, Point3, Quaternion, RealField, Rotation2, Rotation3,
-	Similarity3, Unit, Vector2, Vector3, Vector4,
+	Isometry3, Matrix4, Perspective3, Point2, Point3, RealField, Rotation2, Rotation3, Similarity3,
+	Unit, UnitQuaternion, Vector2, Vector3, Vector4,
 };
 use nalgebra as na;
 use rand::prelude::*;
+use rapier3d::dynamics::{
+	CCDSolver, ImpulseJointSet, IntegrationParameters, IslandManager, MultibodyJointSet,
+	RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
+};
+use rapier3d::geometry::{
+	Ball, ColliderBuilder, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase,
+	NarrowPhase, SharedShape,
+};
+use rapier3d::pipeline::{ActiveEvents, EventHandler, PhysicsPipeline, QueryPipeline};
 use slhack::{controls, scene, sprite, ui as slhack_ui};
 
 use std::collections::HashMap;
 use std::f32::consts::PI;
+use std::sync::RwLock;
+
+pub struct PhysicsEventHandler
+{
+	collision_events: RwLock<Vec<(CollisionEvent, Option<ContactPair>)>>,
+	contact_force_events: RwLock<Vec<(f32, ContactPair)>>,
+}
+
+impl PhysicsEventHandler
+{
+	pub fn new() -> Self
+	{
+		Self {
+			collision_events: RwLock::new(vec![]),
+			contact_force_events: RwLock::new(vec![]),
+		}
+	}
+}
+
+impl EventHandler for PhysicsEventHandler
+{
+	fn handle_collision_event(
+		&self, _bodies: &RigidBodySet, _colliders: &ColliderSet, event: CollisionEvent,
+		contact_pair: Option<&ContactPair>,
+	)
+	{
+		let mut events = self.collision_events.write().unwrap();
+		events.push((event, contact_pair.cloned()));
+	}
+
+	fn handle_contact_force_event(
+		&self, _dt: f32, _bodies: &RigidBodySet, _colliders: &ColliderSet,
+		contact_pair: &ContactPair, total_force_magnitude: f32,
+	)
+	{
+		self.contact_force_events
+			.write()
+			.unwrap()
+			.push((total_force_magnitude, contact_pair.clone()));
+	}
+}
+
+pub struct Physics
+{
+	rigid_body_set: RigidBodySet,
+	collider_set: ColliderSet,
+	integration_parameters: IntegrationParameters,
+	physics_pipeline: PhysicsPipeline,
+	island_manager: IslandManager,
+	broad_phase: DefaultBroadPhase,
+	narrow_phase: NarrowPhase,
+	impulse_joint_set: ImpulseJointSet,
+	multibody_joint_set: MultibodyJointSet,
+	ccd_solver: CCDSolver,
+}
+
+impl Physics
+{
+	fn new() -> Self
+	{
+		Self {
+			rigid_body_set: RigidBodySet::new(),
+			collider_set: ColliderSet::new(),
+			integration_parameters: IntegrationParameters {
+				dt: game_state::DT,
+				num_solver_iterations: 10,
+				//num_internal_pgs_iterations: 10,
+				//contact_damping_ratio: 0.01,
+				//contact_natural_frequency: 60.,
+				//normalized_max_corrective_velocity: 100.,
+				//joint_damping_ratio: 0.01,
+				//joint_natural_frequency: 1e8,
+				..IntegrationParameters::default()
+			},
+			physics_pipeline: PhysicsPipeline::new(),
+			island_manager: IslandManager::new(),
+			broad_phase: DefaultBroadPhase::new(),
+			narrow_phase: NarrowPhase::new(),
+			impulse_joint_set: ImpulseJointSet::new(),
+			multibody_joint_set: MultibodyJointSet::new(),
+			ccd_solver: CCDSolver::new(),
+		}
+	}
+
+	fn step(&mut self, event_handler: &PhysicsEventHandler)
+	{
+		let gravity = Vector3::zeros();
+		self.physics_pipeline.step(
+			&gravity,
+			&self.integration_parameters,
+			&mut self.island_manager,
+			&mut self.broad_phase,
+			&mut self.narrow_phase,
+			&mut self.rigid_body_set,
+			&mut self.collider_set,
+			&mut self.impulse_joint_set,
+			&mut self.multibody_joint_set,
+			&mut self.ccd_solver,
+			&(),
+			event_handler,
+		);
+	}
+}
 
 pub struct Game
 {
@@ -135,9 +247,41 @@ impl Game
 	}
 }
 
+pub fn spawn_player(
+	pos: Point3<f32>, physics: &mut Physics, world: &mut hecs::World,
+) -> Result<hecs::Entity>
+{
+	let entity = world.spawn((
+		comps::Position::new(pos, UnitQuaternion::identity()),
+		comps::Controller::new(),
+	));
+	let rigid_body = RigidBodyBuilder::dynamic()
+		.translation(pos.coords)
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let collider = ColliderBuilder::ball(0.5)
+		.restitution(0.8)
+		.user_data(entity.to_bits().get() as u128)
+		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
+		.build();
+	let ball_body_handle = physics.rigid_body_set.insert(rigid_body);
+	physics.collider_set.insert_with_parent(
+		collider,
+		ball_body_handle,
+		&mut physics.rigid_body_set,
+	);
+	world.insert_one(
+		entity,
+		comps::Physics {
+			handle: ball_body_handle,
+		},
+	)?;
+	Ok(entity)
+}
+
 pub fn spawn_obj(pos: Point3<f32>, world: &mut hecs::World) -> Result<hecs::Entity>
 {
-	let entity = world.spawn((comps::Position::new(pos),));
+	let entity = world.spawn((comps::Position::new(pos, UnitQuaternion::identity()),));
 	Ok(entity)
 }
 
@@ -145,14 +289,81 @@ pub fn spawn_light(
 	pos: Point3<f32>, light: comps::Light, world: &mut hecs::World,
 ) -> Result<hecs::Entity>
 {
-	let entity = world.spawn((comps::Position::new(pos), light));
+	let entity = world.spawn((comps::Position::new(pos, UnitQuaternion::identity()), light));
+	Ok(entity)
+}
+
+pub fn spawn_level(
+	scene_name: &str, state: &mut game_state::GameState, physics: &mut Physics,
+	world: &mut hecs::World,
+) -> Result<hecs::Entity>
+{
+	game_state::cache_scene(state, scene_name)?;
+
+	let entity = world.spawn((
+		comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
+		comps::Scene {
+			scene: scene_name.to_string(),
+		},
+	));
+
+	let level_scene = state.get_scene(scene_name).unwrap();
+	let mut vertices = vec![];
+	let mut indices = vec![];
+	for object in &level_scene.objects
+	{
+		match &object.kind
+		{
+			scene::ObjectKind::MultiMesh { meshes } =>
+			{
+				let mut index_offset = 0;
+				for mesh in meshes
+				{
+					for vtx in &mesh.vtxs
+					{
+						vertices.push(Point3::new(vtx.x, vtx.y, vtx.z));
+					}
+					for idxs in mesh.idxs.chunks(3)
+					{
+						indices.push([
+							idxs[0] as u32 + index_offset,
+							idxs[1] as u32 + index_offset,
+							idxs[2] as u32 + index_offset,
+						]);
+					}
+					index_offset += mesh.vtxs.len() as u32;
+				}
+			}
+			_ => (),
+		}
+	}
+	let rigid_body = RigidBodyBuilder::fixed()
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let collider = ColliderBuilder::trimesh(vertices, indices)?
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let rigid_body_handle = physics.rigid_body_set.insert(rigid_body);
+	physics.collider_set.insert_with_parent(
+		collider,
+		rigid_body_handle,
+		&mut physics.rigid_body_set,
+	);
+	world.insert_one(
+		entity,
+		comps::Physics {
+			handle: rigid_body_handle,
+		},
+	)?;
 	Ok(entity)
 }
 
 struct Map
 {
 	world: hecs::World,
-	camera_target: Point3<f32>,
+	physics: Physics,
+	camera_target: comps::Position,
+	player: hecs::Entity,
 }
 
 impl Map
@@ -161,8 +372,11 @@ impl Map
 	{
 		let mut world = hecs::World::new();
 		spawn_obj(Point3::new(0., 0., 0.), &mut world)?;
+
+		// ???
 		game_state::cache_scene(state, "data/test_level_sprytile.glb")?;
 		state.cache_bitmap("data/level_lightmap.png")?;
+
 		game_state::cache_scene(state, "data/sphere.glb")?;
 		game_state::cache_scene(state, "data/test.obj")?;
 
@@ -184,22 +398,33 @@ impl Map
 		}
 
 		world.spawn((
-			comps::Position::new(Point3::new(2.5, 1.5, -1.)),
+			comps::Position::new(Point3::new(2.5, 1.5, -1.), UnitQuaternion::identity()),
 			comps::Scene {
 				scene: "data/sphere.glb".to_string(),
 			},
 		));
 
 		world.spawn((
-			comps::Position::new(Point3::new(5.5, 1.5, -2.)),
+			comps::Position::new(Point3::new(5.5, 1.5, -2.), UnitQuaternion::identity()),
 			comps::Scene {
 				scene: "data/test.obj".to_string(),
 			},
 		));
 
+		let mut physics = Physics::new();
+		let player = spawn_player(Point3::new(2.5, 2.5, -1.), &mut physics, &mut world)?;
+		spawn_level(
+			"data/test_level_sprytile.glb",
+			state,
+			&mut physics,
+			&mut world,
+		)?;
+
 		Ok(Self {
 			world: world,
-			camera_target: Point3::origin(),
+			physics: physics,
+			camera_target: comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
+			player: player,
 		})
 	}
 
@@ -208,34 +433,72 @@ impl Map
 	{
 		let mut to_die = vec![];
 
-		let t = -(state.hs.time() / 3.);
-		self.camera_target = Point3::new(20. * t.cos() as f32 - 2., 1., 20. * t.sin() as f32 - 1.);
+		if self.world.contains(self.player)
+		{
+			let position = self.world.get::<&comps::Position>(self.player).unwrap();
+			let mut controller = self
+				.world
+				.get::<&mut comps::Controller>(self.player)
+				.unwrap();
+
+			let right_left = state
+				.controls
+				.get_action_state(game_state::Action::MoveRight)
+				- state
+					.controls
+					.get_action_state(game_state::Action::MoveLeft);
+			let up_down = state.controls.get_action_state(game_state::Action::MoveUp)
+				- state
+					.controls
+					.get_action_state(game_state::Action::MoveDown);
+
+			controller.want_move = Vector3::new(right_left, up_down, 0.);
+
+			self.camera_target.pos = position.pos;
+			self.camera_target.scale = position.scale;
+		}
 
 		// Position snapshotting.
 		for (_, position) in self.world.query::<&mut comps::Position>().iter()
 		{
 			position.snapshot();
 		}
+		self.camera_target.snapshot();
 
-		// Input.
-		if state.controls.get_action_state(game_state::Action::Move) > 0.5
+		// Friction.
+		for (_, (position, physics)) in self
+			.world
+			.query::<(&comps::Position, &mut comps::Physics)>()
+			.iter()
 		{
-			for (_, position) in self.world.query::<&mut comps::Position>().iter()
-			{
-				position.pos.y += 100. * DT;
-			}
+			let f = 0.2;
+			let body = &mut self.physics.rigid_body_set[physics.handle];
+			body.reset_forces(true);
+			body.add_force(-f * body.velocity_at_point(&position.pos), true);
 		}
 
-		// Movement.
-		//for (_, position) in self.world.query::<&mut comps::Position>().iter()
-		//{
-		//	position.pos.x += 1500. * DT;
-		//	if position.pos.x > state.buffer_width()
-		//	{
-		//		position.pos.x %= state.buffer_width();
-		//		position.snapshot();
-		//	}
-		//}
+		// Controller.
+		for (_, (controller, physics)) in self
+			.world
+			.query::<(&mut comps::Controller, &comps::Physics)>()
+			.iter()
+		{
+			let body = self.physics.rigid_body_set.get_mut(physics.handle).unwrap();
+			body.add_force(controller.want_move, true);
+		}
+
+		// Physics.
+		let handler = PhysicsEventHandler::new();
+		self.physics.step(&handler);
+		for (_, (position, physics)) in self
+			.world
+			.query::<(&mut comps::Position, &comps::Physics)>()
+			.iter()
+		{
+			let body = &self.physics.rigid_body_set[physics.handle];
+			position.pos = Point3::from(*body.translation());
+			position.rot = *body.rotation();
+		}
 
 		// Remove dead entities
 		to_die.sort();
@@ -261,20 +524,22 @@ impl Map
 		utils::projection_transform(state.hs.buffer_width(), state.hs.buffer_height(), PI / 3.)
 	}
 
-	fn camera_pos(&self) -> Point3<f32>
+	fn camera_pos(&self, alpha: f32) -> Point3<f32>
 	{
-		Point3::new(4., 2., 0.)
+		self.camera_target.draw_pos(alpha)
 	}
 
-	fn make_camera(&self) -> Isometry3<f32>
+	fn make_camera(&self, alpha: f32) -> Isometry3<f32>
 	{
-		utils::make_camera(self.camera_pos(), self.camera_target)
+		let forward = self.camera_target.draw_rot(alpha) * (-Vector3::z());
+		let pos = self.camera_pos(alpha);
+		utils::make_camera(pos, pos + forward)
 	}
 
 	fn draw(&mut self, state: &mut game_state::GameState) -> Result<()>
 	{
 		let project = self.make_project(state);
-		let camera = self.make_camera();
+		let camera = self.make_camera(state.hs.alpha);
 
 		// Forward pass.
 		state
@@ -308,37 +573,56 @@ impl Map
 			.set_shader_transform("model_matrix", &utils::mat4_to_transform(shift))
 			.ok();
 
-		let material_mapper =
-			|_material: &scene::Material<game_state::MaterialKind>,
-			 texture_name: &str|
-			 -> slhack::error::Result<&Bitmap> { state.get_bitmap(texture_name).into_slhack() };
-
-		state
-			.hs
-			.core
-			.set_shader_sampler("lightmap", state.get_bitmap("data/level_lightmap.png")?, 1)
-			.ok();
-		state
-			.get_scene("data/test_level_sprytile.glb")
-			.unwrap()
-			.draw(&state.hs.core, &state.hs.prim, material_mapper);
+		let material_mapper = |material: &scene::Material<game_state::MaterialKind>,
+		                       texture_name: &str|
+		 -> slhack::error::Result<&Bitmap> {
+			if material.desc.two_sided
+			{
+				unsafe {
+					gl::Disable(gl::CULL_FACE);
+				}
+			}
+			else
+			{
+				unsafe {
+					gl::Enable(gl::CULL_FACE);
+				}
+			}
+			if !material.desc.lightmap.is_empty()
+			{
+				state
+					.hs
+					.core
+					.set_shader_sampler(
+						"lightmap",
+						state.get_bitmap(&material.desc.lightmap).into_slhack()?,
+						1,
+					)
+					.ok();
+			}
+			state.get_bitmap(texture_name).into_slhack()
+		};
 
 		for (_, (position, scene)) in self
 			.world
 			.query::<(&comps::Position, &comps::Scene)>()
 			.iter()
 		{
-			let shift = Isometry3::new(position.draw_pos(state.hs.alpha).coords, Vector3::zeros())
-				.to_homogeneous();
+			let shift = Isometry3 {
+				translation: position.draw_pos(state.hs.alpha).coords.into(),
+				rotation: position.draw_rot(state.hs.alpha),
+			}
+			.to_homogeneous();
+			let scale =
+				Similarity3::from_scaling(position.draw_scale(state.hs.alpha)).to_homogeneous();
 
+			state.hs.core.use_transform(&utils::mat4_to_transform(
+				camera.to_homogeneous() * shift * scale,
+			));
 			state
 				.hs
 				.core
-				.use_transform(&utils::mat4_to_transform(camera.to_homogeneous() * shift));
-			state
-				.hs
-				.core
-				.set_shader_transform("model_matrix", &utils::mat4_to_transform(shift))
+				.set_shader_transform("model_matrix", &utils::mat4_to_transform(shift * scale))
 				.ok();
 
 			state.get_scene(&scene.scene).unwrap().draw(
@@ -353,7 +637,7 @@ impl Map
 			&state.hs.core,
 			state.light_shader.as_ref().unwrap(),
 			&utils::mat4_to_transform(project.to_homogeneous()),
-			self.camera_pos(),
+			self.camera_pos(state.hs.alpha),
 		)?;
 
 		for (_, (position, light)) in self
