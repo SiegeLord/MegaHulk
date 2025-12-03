@@ -1,0 +1,51 @@
+[package]
+name = "MegaHulk"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+authors = ["SiegeLord <slabode@aim.com>"]
+
+[dependencies]
+
+slhack = { path = "/home/siege/Projects/HackInit/slhack" }
+
+allegro-sys = { version="0.0.50" }
+allegro = { version="0.0.50", features = ["unstable"] }
+allegro_dialog = { version="0.0.50" }
+allegro_image = { version="0.0.50" }
+allegro_font = { version="0.0.50" }
+allegro_ttf = { version="0.0.50" }
+allegro_acodec = { version="0.0.50" }
+allegro_audio = { version="0.0.50" }
+allegro_primitives = { version="0.0.50" }
+allegro_color = { version="0.0.50" }
+
+#allegro-sys = { path = "/home/siege/Projects/RustAllegro/allegro-sys" }
+#allegro = { path = "/home/siege/Projects/RustAllegro/allegro" }
+#allegro_dialog = { path = "/home/siege/Projects/RustAllegro/allegro_dialog" }
+#allegro_image = { path = "/home/siege/Projects/RustAllegro/allegro_image" }
+#allegro_font = { path = "/home/siege/Projects/RustAllegro/allegro_font" }
+#allegro_ttf = { path = "/home/siege/Projects/RustAllegro/allegro_ttf" }
+#allegro_acodec = { path = "/home/siege/Projects/RustAllegro/allegro_acodec" }
+#allegro_audio = { path = "/home/siege/Projects/RustAllegro/allegro_audio" }
+#allegro_primitives = { path = "/home/siege/Projects/RustAllegro/allegro_primitives" }
+#allegro_color = { path = "/home/siege/Projects/RustAllegro/allegro_color" }
+
+bimap = { version="0.6.2", features = ["serde"] }
+hecs = "0.10.5"
+slr_config = "0.0.22"
+#slr_config = { path = "/home/siege/Projects/SLRConfig/slr_config" }
+nalgebra = "0.34.0"
+rand = "0.8.5"
+serde = "1.0.142"
+serde_derive = "1.0.142"
+gltf = { version="1.0.0", features = ["KHR_lights_punctual"] }
+gl = "0.14.0"
+gl_loader = "0.1.2"
+memoffset = "0.9.1"
+
+[profile.release]
+debug = true
+
+[features]
+use_user_settings = []
