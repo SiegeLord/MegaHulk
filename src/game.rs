@@ -148,6 +148,7 @@ impl Game
 	{
 		if self.subscreens.is_empty()
 		{
+			state.hs.hide_mouse = true;
 			self.map.logic(state)
 		}
 		else
@@ -254,6 +255,9 @@ pub fn spawn_player(
 	let entity = world.spawn((
 		comps::Position::new(pos, UnitQuaternion::identity()),
 		comps::Controller::new(),
+		comps::Scene {
+			scene: "data/test.glb".to_string(),
+		},
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -261,6 +265,7 @@ pub fn spawn_player(
 		.build();
 	let collider = ColliderBuilder::ball(0.5)
 		.restitution(0.8)
+		.mass(1.0)
 		.user_data(entity.to_bits().get() as u128)
 		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
 		.build();
@@ -378,6 +383,7 @@ impl Map
 		state.cache_bitmap("data/level_lightmap.png")?;
 
 		game_state::cache_scene(state, "data/sphere.glb")?;
+		game_state::cache_scene(state, "data/test.glb")?;
 		game_state::cache_scene(state, "data/test.obj")?;
 
 		let level_scene = state.get_scene("data/test_level_sprytile.glb").unwrap();
@@ -452,9 +458,24 @@ impl Map
 					.controls
 					.get_action_state(game_state::Action::MoveDown);
 
+			let rot_right_left = state
+				.controls
+				.get_action_state(game_state::Action::RotateRight)
+				- state
+					.controls
+					.get_action_state(game_state::Action::RotateLeft);
+			let rot_up_down = state
+				.controls
+				.get_action_state(game_state::Action::RotateUp)
+				- state
+					.controls
+					.get_action_state(game_state::Action::RotateDown);
+
 			controller.want_move = Vector3::new(right_left, up_down, 0.);
+			controller.want_rotate = Vector3::new(-rot_up_down, -rot_right_left, 0.);
 
 			self.camera_target.pos = position.pos;
+			self.camera_target.rot = position.rot;
 			self.camera_target.scale = position.scale;
 		}
 
@@ -465,7 +486,7 @@ impl Map
 		}
 		self.camera_target.snapshot();
 
-		// Friction.
+		// Friction + force resetting.
 		for (_, (position, physics)) in self
 			.world
 			.query::<(&comps::Position, &mut comps::Physics)>()
@@ -474,7 +495,10 @@ impl Map
 			let f = 0.2;
 			let body = &mut self.physics.rigid_body_set[physics.handle];
 			body.reset_forces(true);
+			body.reset_torques(true);
 			body.add_force(-f * body.velocity_at_point(&position.pos), true);
+			let f = 0.5;
+			body.add_torque(-f * body.angvel(), true);
 		}
 
 		// Controller.
@@ -484,13 +508,25 @@ impl Map
 			.iter()
 		{
 			let body = self.physics.rigid_body_set.get_mut(physics.handle).unwrap();
-			body.add_force(controller.want_move, true);
+
+			let rot = body.rotation().clone();
+			let forward = rot * (-Vector3::z());
+			let left = rot * Vector3::x();
+			let up = rot * Vector3::y();
+
+			body.add_force(
+				controller.want_move.x * left
+					+ controller.want_move.y * up
+					+ controller.want_move.z * forward,
+				true,
+			);
+			body.apply_torque_impulse(DT * 1.0 * (rot * controller.want_rotate), true);
 		}
 
 		// Physics.
 		let handler = PhysicsEventHandler::new();
 		self.physics.step(&handler);
-		for (_, (position, physics)) in self
+		for (_id, (position, physics)) in self
 			.world
 			.query::<(&mut comps::Position, &comps::Physics)>()
 			.iter()
@@ -532,14 +568,19 @@ impl Map
 	fn make_camera(&self, alpha: f32) -> Isometry3<f32>
 	{
 		let forward = self.camera_target.draw_rot(alpha) * (-Vector3::z());
-		let pos = self.camera_pos(alpha);
-		utils::make_camera(pos, pos + forward)
+		let up = self.camera_target.draw_rot(alpha) * Vector3::y();
+		Isometry3 {
+			rotation: self.camera_target.draw_rot(alpha),
+			translation: (self.camera_target.draw_pos(alpha).coords - 2. * forward + 0.5 * up)
+				.into(),
+		}
+		.inverse()
 	}
 
 	fn draw(&mut self, state: &mut game_state::GameState) -> Result<()>
 	{
 		let project = self.make_project(state);
-		let camera = self.make_camera(state.hs.alpha);
+		let camera = self.make_camera(1.0); //state.hs.alpha);
 
 		// Forward pass.
 		state

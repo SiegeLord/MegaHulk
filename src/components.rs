@@ -77,6 +77,7 @@ pub struct Physics
 pub struct Controller
 {
 	pub want_move: Vector3<f32>,
+	pub want_rotate: Vector3<f32>,
 }
 
 impl Controller
@@ -85,6 +86,7 @@ impl Controller
 	{
 		Self {
 			want_move: Vector3::zeros(),
+			want_rotate: Vector3::zeros(),
 		}
 	}
 }

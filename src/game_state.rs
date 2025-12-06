@@ -40,6 +40,10 @@ pub enum Action
 	MoveRight,
 	MoveUp,
 	MoveDown,
+	RotateLeft,
+	RotateRight,
+	RotateUp,
+	RotateDown,
 }
 
 impl controls::Action for Action
@@ -52,6 +56,10 @@ impl controls::Action for Action
 			Action::MoveRight => "Right",
 			Action::MoveUp => "Up",
 			Action::MoveDown => "Down",
+			Action::RotateLeft => "Rotate Left",
+			Action::RotateRight => "Rotate Right",
+			Action::RotateUp => "Rotate Up",
+			Action::RotateDown => "Rotate Down",
 		}
 	}
 }
@@ -75,6 +83,14 @@ pub fn new_game_controls() -> controls::Controls<Action>
 		Action::MoveDown,
 		[Some(controls::Input::Keyboard(allegro::KeyCode::S)), None],
 	);
+	action_to_inputs.insert(Action::RotateLeft, [Some(controls::Input::MouseXNeg), None]);
+	action_to_inputs.insert(
+		Action::RotateRight,
+		[Some(controls::Input::MouseXPos), None],
+	);
+	action_to_inputs.insert(Action::RotateUp, [Some(controls::Input::MouseYPos), None]);
+	action_to_inputs.insert(Action::RotateDown, [Some(controls::Input::MouseYNeg), None]);
+
 	controls::Controls::new(action_to_inputs)
 }
 
