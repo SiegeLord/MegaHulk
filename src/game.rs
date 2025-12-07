@@ -11,7 +11,8 @@ use nalgebra as na;
 use rand::prelude::*;
 use rapier3d::dynamics::{
 	CCDSolver, FixedJointBuilder, ImpulseJointSet, IntegrationParameters, IslandManager,
-	MultibodyJointSet, RigidBodyBuilder, RigidBodyHandle, RigidBodySet, SpringJointBuilder,
+	MassProperties, MultibodyJointSet, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
+	SpringJointBuilder,
 };
 use rapier3d::geometry::{
 	Ball, ColliderBuilder, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase,
@@ -278,8 +279,13 @@ pub fn spawn_player(
 		.user_data(entity.to_bits().get() as u128)
 		.build();
 	let collider = ColliderBuilder::ball(0.25)
-		.restitution(0.8)
-		.mass(4.0)
+		.restitution(0.1)
+		//.mass(4.0)
+		.mass_properties(MassProperties::new(
+			Point3::origin(),
+			4.0,
+			1000.0f32 * Vector3::new(1., 1., 1.),
+		))
 		.friction(0.)
 		.user_data(entity.to_bits().get() as u128)
 		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
@@ -323,7 +329,7 @@ pub fn spawn_gripper(
 		.angular_damping(1.)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
-	let collider = ColliderBuilder::ball(0.1)
+	let collider = ColliderBuilder::ball(0.2)
 		.restitution(0.8)
 		.mass(1.0)
 		.user_data(entity.to_bits().get() as u128)
@@ -586,12 +592,16 @@ impl Map
 			let (forward, right, up) = get_dirs(rot);
 
 			body.add_force(
-				controller.want_move.x * right
+				16. * (controller.want_move.x * right
 					+ controller.want_move.y * up
-					+ controller.want_move.z * forward,
+					+ controller.want_move.z * forward),
 				true,
 			);
-			body.apply_torque_impulse(DT * (rot * controller.want_rotate), true);
+			//body.apply_torque_impulse(DT * (rot * controller.want_rotate), true);
+			body.set_angvel(
+				DT * 3. * (rot * controller.want_rotate) + body.angvel(),
+				true,
+			);
 		}
 
 		// Grippers.
@@ -792,7 +802,7 @@ impl Map
 	{
 		let alpha = state.hs.alpha;
 		let project = self.make_project(state);
-		let camera = self.make_camera(1.0); //alpha);
+		let camera = self.make_camera(alpha);
 
 		// Forward pass.
 		state
@@ -892,6 +902,7 @@ impl Map
 				self.world.get::<&comps::Position>(connector.end),
 			)
 			{
+				let alpha = 1.0; // TODO: Why!?
 				let start_pos =
 					start_pos.draw_pos(alpha) + start_pos.draw_rot(alpha) * connector.start_offset;
 				let end_pos =
