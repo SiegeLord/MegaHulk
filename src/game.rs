@@ -10,8 +10,8 @@ use na::{
 use nalgebra as na;
 use rand::prelude::*;
 use rapier3d::dynamics::{
-	CCDSolver, ImpulseJointSet, IntegrationParameters, IslandManager, MultibodyJointSet,
-	RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
+	CCDSolver, FixedJointBuilder, ImpulseJointSet, IntegrationParameters, IslandManager,
+	MultibodyJointSet, RigidBodyBuilder, RigidBodyHandle, RigidBodySet, SpringJointBuilder,
 };
 use rapier3d::geometry::{
 	Ball, ColliderBuilder, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase,
@@ -23,6 +23,15 @@ use slhack::{controls, scene, sprite, ui as slhack_ui};
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::sync::RwLock;
+
+fn get_dirs(rot: UnitQuaternion<f32>) -> (Vector3<f32>, Vector3<f32>, Vector3<f32>)
+{
+	let forward = -(rot * Vector3::z());
+	let right = rot * Vector3::x();
+	let up = rot * Vector3::y();
+
+	(forward, right, up)
+}
 
 pub struct PhysicsEventHandler
 {
@@ -250,17 +259,22 @@ impl Game
 
 pub fn spawn_player(
 	pos: Point3<f32>, physics: &mut Physics, world: &mut hecs::World,
+	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
+	let scene = "data/test.glb";
+	game_state::cache_scene(state, scene)?;
 	let entity = world.spawn((
 		comps::Position::new(pos, UnitQuaternion::identity()),
 		comps::Controller::new(),
 		comps::Scene {
-			scene: "data/test.glb".to_string(),
+			scene: scene.to_string(),
 		},
+		comps::Grippers::new(),
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
+		.angular_damping(10.)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
 	let collider = ColliderBuilder::ball(0.5)
@@ -275,6 +289,53 @@ pub fn spawn_player(
 		ball_body_handle,
 		&mut physics.rigid_body_set,
 	);
+	world.insert_one(
+		entity,
+		comps::Physics {
+			handle: ball_body_handle,
+		},
+	)?;
+	Ok(entity)
+}
+
+pub fn spawn_gripper(
+	pos: Point3<f32>, vel: Vector3<f32>, parent: hecs::Entity, physics: &mut Physics,
+	world: &mut hecs::World, state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene = "data/gripper.glb";
+	game_state::cache_scene(state, scene)?;
+	let entity = world.spawn((
+		comps::Position::new(pos, UnitQuaternion::identity()),
+		comps::Scene {
+			scene: scene.to_string(),
+		},
+		comps::Gripper::new(parent),
+	));
+	let rigid_body = RigidBodyBuilder::dynamic()
+		.translation(pos.coords)
+		.angular_damping(1.)
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let collider = ColliderBuilder::ball(0.1)
+		.restitution(0.8)
+		.mass(1.0)
+		.user_data(entity.to_bits().get() as u128)
+		.active_events(ActiveEvents::COLLISION_EVENTS)
+		.build();
+	let ball_body_handle = physics.rigid_body_set.insert(rigid_body);
+	physics.collider_set.insert_with_parent(
+		collider,
+		ball_body_handle,
+		&mut physics.rigid_body_set,
+	);
+
+	physics
+		.rigid_body_set
+		.get_mut(ball_body_handle)
+		.unwrap()
+		.apply_impulse(vel, true);
+
 	world.insert_one(
 		entity,
 		comps::Physics {
@@ -369,6 +430,7 @@ struct Map
 	physics: Physics,
 	camera_target: comps::Position,
 	player: hecs::Entity,
+	level: hecs::Entity,
 }
 
 impl Map
@@ -383,7 +445,6 @@ impl Map
 		state.cache_bitmap("data/level_lightmap.png")?;
 
 		game_state::cache_scene(state, "data/sphere.glb")?;
-		game_state::cache_scene(state, "data/test.glb")?;
 		game_state::cache_scene(state, "data/test.obj")?;
 
 		let level_scene = state.get_scene("data/test_level_sprytile.glb").unwrap();
@@ -418,8 +479,8 @@ impl Map
 		));
 
 		let mut physics = Physics::new();
-		let player = spawn_player(Point3::new(2.5, 2.5, -1.), &mut physics, &mut world)?;
-		spawn_level(
+		let player = spawn_player(Point3::new(2.5, 2.5, -1.), &mut physics, &mut world, state)?;
+		let level = spawn_level(
 			"data/test_level_sprytile.glb",
 			state,
 			&mut physics,
@@ -431,6 +492,7 @@ impl Map
 			physics: physics,
 			camera_target: comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
 			player: player,
+			level: level,
 		})
 	}
 
@@ -474,6 +536,14 @@ impl Map
 			controller.want_move = Vector3::new(right_left, up_down, 0.);
 			controller.want_rotate = Vector3::new(-rot_up_down, -rot_right_left, 0.);
 
+			for (idx, action) in [game_state::Action::GripLeft, game_state::Action::GripRight]
+				.iter()
+				.enumerate()
+			{
+				controller.want_gripper[idx] = state.controls.get_action_state(*action) > 0.5;
+				state.controls.clear_action_state(*action);
+			}
+
 			self.camera_target.pos = position.pos;
 			self.camera_target.rot = position.rot;
 			self.camera_target.scale = position.scale;
@@ -497,8 +567,9 @@ impl Map
 			body.reset_forces(true);
 			body.reset_torques(true);
 			body.add_force(-f * body.velocity_at_point(&position.pos), true);
-			let f = 0.5;
-			body.add_torque(-f * body.angvel(), true);
+			//let f = 0.5;
+			//dbg!(body.angvel());
+			//body.add_torque(-f * body.angvel(), true);
 		}
 
 		// Controller.
@@ -510,12 +581,10 @@ impl Map
 			let body = self.physics.rigid_body_set.get_mut(physics.handle).unwrap();
 
 			let rot = body.rotation().clone();
-			let forward = rot * (-Vector3::z());
-			let left = rot * Vector3::x();
-			let up = rot * Vector3::y();
+			let (forward, right, up) = get_dirs(rot);
 
 			body.add_force(
-				controller.want_move.x * left
+				controller.want_move.x * right
 					+ controller.want_move.y * up
 					+ controller.want_move.z * forward,
 				true,
@@ -523,9 +592,124 @@ impl Map
 			body.apply_torque_impulse(DT * 1.0 * (rot * controller.want_rotate), true);
 		}
 
+		// Grippers.
+		let mut to_spawn = vec![];
+		for (id, (controller, position, grippers)) in self
+			.world
+			.query::<(
+				&mut comps::Controller,
+				&comps::Position,
+				&mut comps::Grippers,
+			)>()
+			.iter()
+		{
+			for (idx, (want_gripper, gripper, time_to_grip, offset)) in itertools::izip!(
+				&controller.want_gripper,
+				&mut grippers.grippers,
+				&mut grippers.time_to_grip,
+				&grippers.offsets
+			)
+			.enumerate()
+			{
+				if *want_gripper
+				{
+					if let Some(gripper_id) = gripper
+					{
+						to_die.push(*gripper_id);
+						*gripper = None;
+					}
+					else
+					{
+						if state.hs.time() >= *time_to_grip
+						{
+							to_spawn.push((id, position.pos, position.rot, *offset, idx));
+							*time_to_grip = state.hs.time() + 0.5;
+						}
+					}
+				}
+			}
+		}
+		for (id, pos, rot, offset, idx) in to_spawn
+		{
+			let (forward, _, _) = get_dirs(rot);
+			let gripper = spawn_gripper(
+				pos + rot * offset,
+				5. * forward,
+				id,
+				&mut self.physics,
+				&mut self.world,
+				state,
+			)?;
+			let mut grippers = self.world.get::<&mut comps::Grippers>(id).unwrap();
+			grippers.grippers[idx] = Some(gripper);
+		}
+
 		// Physics.
 		let handler = PhysicsEventHandler::new();
 		self.physics.step(&handler);
+
+		for (event, contact_pair) in handler.collision_events.try_read().unwrap().iter()
+		{
+			//if let Some(contact_pair) = contact_pair
+			//	&& contact_pair.has_any_active_contact
+			if let CollisionEvent::Started(collider_handle_1, collider_handle_2, _) = event
+			{
+				//let collider_handle_1 = contact_pair.collider1;
+				//let collider_handle_2 = contact_pair.collider2;
+				let collider1 = self.physics.collider_set.get(*collider_handle_1).unwrap();
+				let collider2 = self.physics.collider_set.get(*collider_handle_2).unwrap();
+				let body_handle_1 = collider1.parent().unwrap();
+				let body_handle_2 = collider2.parent().unwrap();
+				let id1 = hecs::Entity::from_bits(collider1.user_data as u64).unwrap();
+				let id2 = hecs::Entity::from_bits(collider2.user_data as u64).unwrap();
+
+				let (_, id, level_body_handle, body_handle) = if id1 == self.level
+				{
+					(id1, id2, body_handle_1, body_handle_2)
+				}
+				else if id2 == self.level
+				{
+					(id1, id2, body_handle_2, body_handle_1)
+				}
+				else
+				{
+					continue;
+				};
+
+				if let Some(gripper) = self.world.query_one::<&comps::Gripper>(id).unwrap().get()
+				{
+					let body = self.physics.rigid_body_set.get_mut(body_handle).unwrap();
+
+					let joint = FixedJointBuilder::new()
+						.local_anchor1(Point3::new(0., 0., 0.))
+						.local_anchor2(Point3::origin() + body.translation());
+					self.physics.impulse_joint_set.insert(
+						body_handle,
+						level_body_handle,
+						joint,
+						true,
+					);
+
+					if let Some(physics) = self
+						.world
+						.query_one::<&mut comps::Physics>(gripper.parent)
+						.unwrap()
+						.get()
+					{
+						let joint = SpringJointBuilder::new(0.1, 10., 10.)
+							.local_anchor1(Point3::origin())
+							.local_anchor2(Point3::origin());
+						self.physics.impulse_joint_set.insert(
+							body_handle,
+							physics.handle,
+							joint,
+							true,
+						);
+					}
+				}
+			}
+		}
+
 		for (_id, (position, physics)) in self
 			.world
 			.query::<(&mut comps::Position, &comps::Physics)>()
@@ -541,6 +725,17 @@ impl Map
 		to_die.dedup();
 		for id in to_die
 		{
+			if let Ok(physics) = self.world.get::<&comps::Physics>(id)
+			{
+				self.physics.rigid_body_set.remove(
+					physics.handle,
+					&mut self.physics.island_manager,
+					&mut self.physics.collider_set,
+					&mut self.physics.impulse_joint_set,
+					&mut self.physics.multibody_joint_set,
+					true,
+				);
+			}
 			//println!("died {id:?}");
 			self.world.despawn(id)?;
 		}
@@ -567,12 +762,9 @@ impl Map
 
 	fn make_camera(&self, alpha: f32) -> Isometry3<f32>
 	{
-		let forward = self.camera_target.draw_rot(alpha) * (-Vector3::z());
-		let up = self.camera_target.draw_rot(alpha) * Vector3::y();
 		Isometry3 {
 			rotation: self.camera_target.draw_rot(alpha),
-			translation: (self.camera_target.draw_pos(alpha).coords - 2. * forward + 0.5 * up)
-				.into(),
+			translation: self.camera_target.draw_pos(alpha).coords.into(),
 		}
 		.inverse()
 	}

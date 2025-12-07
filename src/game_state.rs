@@ -44,6 +44,8 @@ pub enum Action
 	RotateRight,
 	RotateUp,
 	RotateDown,
+	GripLeft,
+	GripRight,
 }
 
 impl controls::Action for Action
@@ -60,6 +62,8 @@ impl controls::Action for Action
 			Action::RotateRight => "Rotate Right",
 			Action::RotateUp => "Rotate Up",
 			Action::RotateDown => "Rotate Down",
+			Action::GripLeft => "Grip Left",
+			Action::GripRight => "Grip Right",
 		}
 	}
 }
@@ -90,6 +94,15 @@ pub fn new_game_controls() -> controls::Controls<Action>
 	);
 	action_to_inputs.insert(Action::RotateUp, [Some(controls::Input::MouseYPos), None]);
 	action_to_inputs.insert(Action::RotateDown, [Some(controls::Input::MouseYNeg), None]);
+
+	action_to_inputs.insert(
+		Action::GripLeft,
+		[Some(controls::Input::MouseButton(1)), None],
+	);
+	action_to_inputs.insert(
+		Action::GripRight,
+		[Some(controls::Input::MouseButton(2)), None],
+	);
 
 	controls::Controls::new(action_to_inputs)
 }

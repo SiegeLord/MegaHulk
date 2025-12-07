@@ -78,6 +78,7 @@ pub struct Controller
 {
 	pub want_move: Vector3<f32>,
 	pub want_rotate: Vector3<f32>,
+	pub want_gripper: [bool; 2],
 }
 
 impl Controller
@@ -87,6 +88,41 @@ impl Controller
 		Self {
 			want_move: Vector3::zeros(),
 			want_rotate: Vector3::zeros(),
+			want_gripper: [false, false],
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct Gripper
+{
+	pub parent: hecs::Entity,
+}
+
+impl Gripper
+{
+	pub fn new(parent: hecs::Entity) -> Self
+	{
+		Self { parent: parent }
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct Grippers
+{
+	pub time_to_grip: [f64; 2],
+	pub grippers: [Option<hecs::Entity>; 2],
+	pub offsets: [Vector3<f32>; 2],
+}
+
+impl Grippers
+{
+	pub fn new() -> Self
+	{
+		Self {
+			time_to_grip: [0.0, 0.0],
+			grippers: [None, None],
+			offsets: [Vector3::new(-0.5, 0., -1.0), Vector3::new(0.5, 0., -1.0)],
 		}
 	}
 }

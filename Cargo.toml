@@ -44,6 +44,7 @@ gl = "0.14.0"
 gl_loader = "0.1.2"
 memoffset = "0.9.1"
 rapier3d = "0.29.0"
+itertools = "0.14.0"
 
 [profile.release]
 debug = true
