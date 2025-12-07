@@ -277,9 +277,10 @@ pub fn spawn_player(
 		.angular_damping(10.)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
-	let collider = ColliderBuilder::ball(0.5)
+	let collider = ColliderBuilder::ball(0.25)
 		.restitution(0.8)
-		.mass(1.0)
+		.mass(4.0)
+		.friction(0.)
 		.user_data(entity.to_bits().get() as u128)
 		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
 		.build();
@@ -311,6 +312,11 @@ pub fn spawn_gripper(
 			scene: scene.to_string(),
 		},
 		comps::Gripper::new(parent),
+		comps::Light {
+			color: Color::from_rgb_f(0., 0., 1.),
+			intensity: 100.,
+			static_: false,
+		},
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -342,6 +348,16 @@ pub fn spawn_gripper(
 			handle: ball_body_handle,
 		},
 	)?;
+	Ok(entity)
+}
+
+pub fn spawn_connector(
+	start: hecs::Entity, end: hecs::Entity, start_offset: Vector3<f32>, end_offset: Vector3<f32>,
+	world: &mut hecs::World, state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	game_state::cache_scene(state, "data/connector.glb")?;
+	let entity = world.spawn((comps::Connector::new(start, end, start_offset, end_offset),));
 	Ok(entity)
 }
 
@@ -464,20 +480,6 @@ impl Map
 			}
 		}
 
-		world.spawn((
-			comps::Position::new(Point3::new(2.5, 1.5, -1.), UnitQuaternion::identity()),
-			comps::Scene {
-				scene: "data/sphere.glb".to_string(),
-			},
-		));
-
-		world.spawn((
-			comps::Position::new(Point3::new(5.5, 1.5, -2.), UnitQuaternion::identity()),
-			comps::Scene {
-				scene: "data/test.obj".to_string(),
-			},
-		));
-
 		let mut physics = Physics::new();
 		let player = spawn_player(Point3::new(2.5, 2.5, -1.), &mut physics, &mut world, state)?;
 		let level = spawn_level(
@@ -589,7 +591,7 @@ impl Map
 					+ controller.want_move.z * forward,
 				true,
 			);
-			body.apply_torque_impulse(DT * 1.0 * (rot * controller.want_rotate), true);
+			body.apply_torque_impulse(DT * (rot * controller.want_rotate), true);
 		}
 
 		// Grippers.
@@ -634,9 +636,17 @@ impl Map
 			let (forward, _, _) = get_dirs(rot);
 			let gripper = spawn_gripper(
 				pos + rot * offset,
-				5. * forward,
+				10. * forward,
 				id,
 				&mut self.physics,
+				&mut self.world,
+				state,
+			)?;
+			spawn_connector(
+				id,
+				gripper,
+				offset,
+				Vector3::zeros(),
 				&mut self.world,
 				state,
 			)?;
@@ -648,7 +658,7 @@ impl Map
 		let handler = PhysicsEventHandler::new();
 		self.physics.step(&handler);
 
-		for (event, contact_pair) in handler.collision_events.try_read().unwrap().iter()
+		for (event, _contact_pair) in handler.collision_events.try_read().unwrap().iter()
 		{
 			//if let Some(contact_pair) = contact_pair
 			//	&& contact_pair.has_any_active_contact
@@ -720,6 +730,15 @@ impl Map
 			position.rot = *body.rotation();
 		}
 
+		// Connector upkeep
+		for (id, connector) in self.world.query::<&comps::Connector>().iter()
+		{
+			if !self.world.contains(connector.start) || !self.world.contains(connector.end)
+			{
+				to_die.push(id);
+			}
+		}
+
 		// Remove dead entities
 		to_die.sort();
 		to_die.dedup();
@@ -771,8 +790,9 @@ impl Map
 
 	fn draw(&mut self, state: &mut game_state::GameState) -> Result<()>
 	{
+		let alpha = state.hs.alpha;
 		let project = self.make_project(state);
-		let camera = self.make_camera(1.0); //state.hs.alpha);
+		let camera = self.make_camera(1.0); //alpha);
 
 		// Forward pass.
 		state
@@ -842,12 +862,11 @@ impl Map
 			.iter()
 		{
 			let shift = Isometry3 {
-				translation: position.draw_pos(state.hs.alpha).coords.into(),
-				rotation: position.draw_rot(state.hs.alpha),
+				translation: position.draw_pos(alpha).coords.into(),
+				rotation: position.draw_rot(alpha),
 			}
 			.to_homogeneous();
-			let scale =
-				Similarity3::from_scaling(position.draw_scale(state.hs.alpha)).to_homogeneous();
+			let scale = Similarity3::from_scaling(position.draw_scale(alpha)).to_homogeneous();
 
 			state.hs.core.use_transform(&utils::mat4_to_transform(
 				camera.to_homogeneous() * shift * scale,
@@ -865,12 +884,53 @@ impl Map
 			);
 		}
 
+		// Connectors
+		for (_, connector) in self.world.query::<&comps::Connector>().iter()
+		{
+			if let (Ok(start_pos), Ok(end_pos)) = (
+				self.world.get::<&comps::Position>(connector.start),
+				self.world.get::<&comps::Position>(connector.end),
+			)
+			{
+				let start_pos =
+					start_pos.draw_pos(alpha) + start_pos.draw_rot(alpha) * connector.start_offset;
+				let end_pos =
+					end_pos.draw_pos(alpha) + end_pos.draw_rot(alpha) * connector.end_offset;
+
+				let shift = Isometry3 {
+					translation: ((start_pos.coords + end_pos.coords) / 2.0).into(),
+					rotation: UnitQuaternion::face_towards(&(end_pos - start_pos), &Vector3::y()),
+				}
+				.to_homogeneous();
+				let scale = Matrix4::new_nonuniform_scaling(&Vector3::new(
+					1.,
+					1.,
+					(start_pos - end_pos).norm() / 2.,
+				));
+
+				state.hs.core.use_transform(&utils::mat4_to_transform(
+					camera.to_homogeneous() * shift * scale,
+				));
+				state
+					.hs
+					.core
+					.set_shader_transform("model_matrix", &utils::mat4_to_transform(shift * scale))
+					.ok();
+
+				state.get_scene("data/connector.glb").unwrap().draw(
+					&state.hs.core,
+					&state.hs.prim,
+					material_mapper,
+				);
+			}
+		}
+
 		// Light pass.
 		state.deferred_renderer.as_mut().unwrap().begin_light_pass(
 			&state.hs.core,
 			state.light_shader.as_ref().unwrap(),
 			&utils::mat4_to_transform(project.to_homogeneous()),
-			self.camera_pos(state.hs.alpha),
+			self.camera_pos(alpha),
 		)?;
 
 		for (_, (position, light)) in self
@@ -878,7 +938,7 @@ impl Map
 			.query::<(&comps::Position, &comps::Light)>()
 			.iter()
 		{
-			let shift = Isometry3::new(position.draw_pos(state.hs.alpha).coords, Vector3::zeros());
+			let shift = Isometry3::new(position.draw_pos(alpha).coords, Vector3::zeros());
 			let transform = Similarity3::from_isometry(shift, 0.5 * light.intensity.sqrt());
 			let light_pos = transform.transform_point(&Point3::origin());
 

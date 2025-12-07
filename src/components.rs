@@ -126,3 +126,27 @@ impl Grippers
 		}
 	}
 }
+
+pub struct Connector
+{
+	pub start: hecs::Entity,
+	pub end: hecs::Entity,
+	pub start_offset: Vector3<f32>,
+	pub end_offset: Vector3<f32>,
+}
+
+impl Connector
+{
+	pub fn new(
+		start: hecs::Entity, end: hecs::Entity, start_offset: Vector3<f32>,
+		end_offset: Vector3<f32>,
+	) -> Self
+	{
+		Self {
+			start: start,
+			end: end,
+			start_offset: start_offset,
+			end_offset: end_offset,
+		}
+	}
+}

@@ -35,18 +35,18 @@ impl Error
 		}
 	}
 
-	pub fn from_parts(parts: (String, Option<Box<dyn error::Error + 'static>>)) -> Self
+	pub fn from_parts(parts: (String, Option<Box<dyn error::Error + 'static>>, Backtrace)) -> Self
 	{
 		Self {
 			message: parts.0,
 			inner: parts.1,
-			backtrace: Backtrace::capture(),
+			backtrace: parts.2,
 		}
 	}
 
-	pub fn into_parts(self) -> (String, Option<Box<dyn error::Error + 'static>>)
+	pub fn into_parts(self) -> (String, Option<Box<dyn error::Error + 'static>>, Backtrace)
 	{
-		(self.message, self.inner)
+		(self.message, self.inner, self.backtrace)
 	}
 
 	pub fn context(self, message: String) -> Self
