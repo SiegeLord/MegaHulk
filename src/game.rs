@@ -463,13 +463,13 @@ impl Map
 		spawn_obj(Point3::new(0., 0., 0.), &mut world)?;
 
 		// ???
-		game_state::cache_scene(state, "data/test_level_sprytile.glb")?;
+		game_state::cache_scene(state, "data/test_level.glb")?;
 		state.cache_bitmap("data/level_lightmap.png")?;
 
 		game_state::cache_scene(state, "data/sphere.glb")?;
 		game_state::cache_scene(state, "data/test.obj")?;
 
-		let level_scene = state.get_scene("data/test_level_sprytile.glb").unwrap();
+		let level_scene = state.get_scene("data/test_level.glb").unwrap();
 		for object in &level_scene.objects
 		{
 			if let scene::ObjectKind::Light { color, intensity } = object.kind
@@ -489,7 +489,7 @@ impl Map
 		let mut physics = Physics::new();
 		let player = spawn_player(Point3::new(2.5, 2.5, -1.), &mut physics, &mut world, state)?;
 		let level = spawn_level(
-			"data/test_level_sprytile.glb",
+			"data/test_level.glb",
 			state,
 			&mut physics,
 			&mut world,
