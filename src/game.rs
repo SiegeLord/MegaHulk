@@ -270,13 +270,16 @@ pub fn spawn_robot(
 		comps::Scene {
 			scene: scene.to_string(),
 		},
+		comps::Controller::new(),
+		comps::AI::new(),
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
 		.angular_damping(10.)
+		.linear_damping(5.)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
-	let collider = ColliderBuilder::ball(0.25)
+	let collider = ColliderBuilder::ball(0.5)
 		.restitution(0.1)
 		.mass(4.0)
 		.friction(0.)
@@ -321,6 +324,7 @@ pub fn spawn_player(
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
 		.angular_damping(10.)
+		.linear_damping(5.)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
 	let collider = ColliderBuilder::ball(0.25)
@@ -533,7 +537,7 @@ impl Map
 
 		let mut physics = Physics::new();
 		spawn_robot(Point3::new(2.5, 2.5, 1.), &mut physics, &mut world, state)?;
-		let player = spawn_player(Point3::new(2.5, 2.5, -1.), &mut physics, &mut world, state)?;
+		let player = spawn_player(Point3::new(2., 2.5, 4.), &mut physics, &mut world, state)?;
 		let level = spawn_level("data/test_level.glb", state, &mut physics, &mut world)?;
 
 		Ok(Self {
@@ -557,6 +561,7 @@ impl Map
 		}
 		self.camera_target.snapshot();
 
+		// Player.
 		if self.world.contains(self.player)
 		{
 			let position = self.world.get::<&comps::Position>(self.player).unwrap();
@@ -605,17 +610,68 @@ impl Map
 			self.camera_target.scale = position.scale;
 		}
 
+		// AI.
+		for (_, (position, controller, ai)) in self
+			.world
+			.query::<(&comps::Position, &mut comps::Controller, &mut comps::AI)>()
+			.iter()
+		{
+			let mut new_state = None;
+			match ai.state
+			{
+				comps::AIState::Idle =>
+				{
+					if let Ok(player_position) = self.world.get::<&comps::Position>(self.player)
+					{
+						if (player_position.pos - position.pos).norm() < 4.
+						{
+							new_state = Some(comps::AIState::Attacking(self.player))
+						}
+					}
+				}
+				comps::AIState::Attacking(target) =>
+				{
+					if let Ok(target_position) = self.world.get::<&comps::Position>(target)
+					{
+						let (forward, right, up) = get_dirs(position.rot);
+						let diff = target_position.pos - position.pos;
+						let dir = diff.normalize();
+						let rot_speed = 5.;
+						controller.want_rotate.x = rot_speed * dir.dot(&up);
+						controller.want_rotate.y = -rot_speed * dir.dot(&right);
+
+						controller.want_move.z = 0.;
+						if dir.dot(&forward) > 0.99
+						{
+							if diff.norm() > 3.
+							{
+								controller.want_move.z = 1.;
+							}
+							else if diff.norm() < 1.
+							{
+								controller.want_move.z = -1.;
+							}
+						}
+					}
+				}
+			}
+			if let Some(new_state) = new_state
+			{
+				ai.state = new_state;
+			}
+		}
+
 		// Friction + force resetting.
 		for (_, (position, physics)) in self
 			.world
 			.query::<(&comps::Position, &mut comps::Physics)>()
 			.iter()
 		{
-			let f = 0.2;
+			let f = 0.9;
 			let body = &mut self.physics.rigid_body_set[physics.handle];
 			body.reset_forces(true);
 			body.reset_torques(true);
-			body.add_force(-f * body.velocity_at_point(&position.pos), true);
+			//body.add_force(-f * body.velocity_at_point(&position.pos), true);
 			//let f = 0.5;
 			//dbg!(body.angvel());
 			//body.add_torque(-f * body.angvel(), true);
@@ -668,7 +724,10 @@ impl Map
 				{
 					if let Some(gripper_id) = gripper
 					{
-						to_die.push(*gripper_id);
+						if self.world.contains(*gripper_id)
+						{
+							to_die.push(*gripper_id);
+						}
 						*gripper = None;
 					}
 					else
@@ -734,6 +793,14 @@ impl Map
 				}
 				else
 				{
+					if self.world.get::<&comps::Gripper>(id1).is_ok()
+					{
+						to_die.push(id1);
+					}
+					if self.world.get::<&comps::Gripper>(id2).is_ok()
+					{
+						to_die.push(id2);
+					}
 					continue;
 				};
 
@@ -757,7 +824,7 @@ impl Map
 						.unwrap()
 						.get()
 					{
-						let joint = SpringJointBuilder::new(0.1, 10., 10.)
+						let joint = SpringJointBuilder::new(0.1, 30., 10.)
 							.local_anchor1(Point3::origin())
 							.local_anchor2(Point3::origin());
 						self.physics.impulse_joint_set.insert(
@@ -806,7 +873,6 @@ impl Map
 					true,
 				);
 			}
-			//println!("died {id:?}");
 			self.world.despawn(id)?;
 		}
 

@@ -150,3 +150,26 @@ impl Connector
 		}
 	}
 }
+
+#[derive(Debug, Clone)]
+pub enum AIState
+{
+	Idle,
+	Attacking(hecs::Entity),
+}
+
+#[derive(Debug, Clone)]
+pub struct AI
+{
+	pub state: AIState,
+}
+
+impl AI
+{
+	pub fn new() -> Self
+	{
+		Self {
+			state: AIState::Idle,
+		}
+	}
+}
