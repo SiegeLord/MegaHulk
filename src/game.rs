@@ -312,6 +312,11 @@ pub fn spawn_player(
 			scene: scene.to_string(),
 		},
 		comps::Grippers::new(),
+		comps::Light {
+			color: Color::from_rgb_f(1., 1., 1.),
+			intensity: 100.,
+			static_: false,
+		},
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -545,6 +550,13 @@ impl Map
 	{
 		let mut to_die = vec![];
 
+		// Position snapshotting.
+		for (_, position) in self.world.query::<&mut comps::Position>().iter()
+		{
+			position.snapshot();
+		}
+		self.camera_target.snapshot();
+
 		if self.world.contains(self.player)
 		{
 			let position = self.world.get::<&comps::Position>(self.player).unwrap();
@@ -592,13 +604,6 @@ impl Map
 			self.camera_target.rot = position.rot;
 			self.camera_target.scale = position.scale;
 		}
-
-		// Position snapshotting.
-		for (_, position) in self.world.query::<&mut comps::Position>().iter()
-		{
-			position.snapshot();
-		}
-		self.camera_target.snapshot();
 
 		// Friction + force resetting.
 		for (_, (position, physics)) in self
@@ -938,7 +943,6 @@ impl Map
 				self.world.get::<&comps::Position>(connector.end),
 			)
 			{
-				let alpha = 1.0; // TODO: Why!?
 				let start_pos =
 					start_pos.draw_pos(alpha) + start_pos.draw_rot(alpha) * connector.start_offset;
 				let end_pos =
