@@ -281,7 +281,7 @@ pub fn spawn_robot(
 		.build();
 	let collider = ColliderBuilder::ball(0.5)
 		.restitution(0.1)
-		.mass(4.0)
+		.mass(2.0)
 		.friction(0.)
 		.user_data(entity.to_bits().get() as u128)
 		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
@@ -317,7 +317,7 @@ pub fn spawn_player(
 		comps::Grippers::new(),
 		comps::Light {
 			color: Color::from_rgb_f(1., 1., 1.),
-			intensity: 100.,
+			intensity: 300.,
 			static_: false,
 		},
 	));
@@ -735,7 +735,7 @@ impl Map
 						if state.hs.time() >= *time_to_grip
 						{
 							to_spawn.push((id, position.pos, position.rot, *offset, idx));
-							*time_to_grip = state.hs.time() + 0.5;
+							*time_to_grip = state.hs.time() + 0.1;
 						}
 					}
 				}
