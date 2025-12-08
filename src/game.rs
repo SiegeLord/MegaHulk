@@ -258,6 +258,46 @@ impl Game
 	}
 }
 
+pub fn spawn_robot(
+	pos: Point3<f32>, physics: &mut Physics, world: &mut hecs::World,
+	state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene = "data/robot1.glb";
+	game_state::cache_scene(state, scene)?;
+	let entity = world.spawn((
+		comps::Position::new(pos, UnitQuaternion::identity()),
+		comps::Scene {
+			scene: scene.to_string(),
+		},
+	));
+	let rigid_body = RigidBodyBuilder::dynamic()
+		.translation(pos.coords)
+		.angular_damping(10.)
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let collider = ColliderBuilder::ball(0.25)
+		.restitution(0.1)
+		.mass(4.0)
+		.friction(0.)
+		.user_data(entity.to_bits().get() as u128)
+		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
+		.build();
+	let ball_body_handle = physics.rigid_body_set.insert(rigid_body);
+	physics.collider_set.insert_with_parent(
+		collider,
+		ball_body_handle,
+		&mut physics.rigid_body_set,
+	);
+	world.insert_one(
+		entity,
+		comps::Physics {
+			handle: ball_body_handle,
+		},
+	)?;
+	Ok(entity)
+}
+
 pub fn spawn_player(
 	pos: Point3<f32>, physics: &mut Physics, world: &mut hecs::World,
 	state: &mut game_state::GameState,
@@ -487,13 +527,9 @@ impl Map
 		}
 
 		let mut physics = Physics::new();
+		spawn_robot(Point3::new(2.5, 2.5, 1.), &mut physics, &mut world, state)?;
 		let player = spawn_player(Point3::new(2.5, 2.5, -1.), &mut physics, &mut world, state)?;
-		let level = spawn_level(
-			"data/test_level.glb",
-			state,
-			&mut physics,
-			&mut world,
-		)?;
+		let level = spawn_level("data/test_level.glb", state, &mut physics, &mut world)?;
 
 		Ok(Self {
 			world: world,

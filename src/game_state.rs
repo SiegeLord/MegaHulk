@@ -23,6 +23,7 @@ pub enum MaterialKind
 	Static = 0,
 	Dynamic = 1,
 	Fullbright = 2,
+	DynamicWithLightmap = 3,
 }
 
 impl Into<i32> for MaterialKind
