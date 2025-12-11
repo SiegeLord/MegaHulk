@@ -16,8 +16,8 @@ use rapier3d::dynamics::{
 	RigidBodySet, SpringJointBuilder,
 };
 use rapier3d::geometry::{
-	Ball, ColliderBuilder, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase,
-	NarrowPhase, SharedShape,
+	Ball, ColliderBuilder, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase, Group,
+	InteractionGroups, NarrowPhase, SharedShape,
 };
 use rapier3d::pipeline::{ActiveEvents, EventHandler, PhysicsPipeline, QueryPipeline};
 use slhack::{controls, scene, sprite, ui as slhack_ui};
@@ -34,6 +34,12 @@ fn get_dirs(rot: UnitQuaternion<f32>) -> (Vector3<f32>, Vector3<f32>, Vector3<f3
 
 	(forward, right, up)
 }
+
+const PLAYER_GROUP: Group = Group::GROUP_1;
+const GRIPPER_GROUP: Group = Group::GROUP_2;
+const BIG_GROUP: Group = Group::GROUP_3;
+const SMALL_GROUP: Group = Group::GROUP_4;
+const NO_COLLISION: Group = Group::GROUP_5;
 
 pub struct PhysicsEventHandler
 {
@@ -288,6 +294,7 @@ pub fn spawn_robot(
 		.mass(1.0)
 		.friction(0.)
 		.user_data(entity.to_bits().get() as u128)
+		.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP))
 		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
 		.build();
 	let ball_body_handle = physics.rigid_body_set.insert(rigid_body);
@@ -328,6 +335,11 @@ pub fn attach_gripper_to_parent(
 		.rigid_body_set
 		.get_mut(gripper_physics.handle)
 		.unwrap();
+	for collider_handle in gripper_body.colliders()
+	{
+		let collider = physics.collider_set.get_mut(*collider_handle).unwrap();
+		collider.set_collision_groups(InteractionGroups::new(NO_COLLISION, Group::empty()));
+	}
 	gripper_body.set_translation(desired_pos, true);
 	gripper_position.pos = Point3::origin() + desired_pos;
 	gripper_position.rot = desired_rot;
@@ -370,7 +382,7 @@ pub fn spawn_player(
 		.linear_damping(5.)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
-	let collider = ColliderBuilder::ball(0.25)
+	let collider = ColliderBuilder::ball(0.5)
 		.restitution(0.1)
 		//.mass(4.0)
 		.mass_properties(MassProperties::new(
@@ -380,6 +392,7 @@ pub fn spawn_player(
 		))
 		.friction(0.)
 		.user_data(entity.to_bits().get() as u128)
+		.collision_groups(InteractionGroups::new(PLAYER_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP))
 		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
 		.build();
 	let ball_body_handle = physics.rigid_body_set.insert(rigid_body);
@@ -502,6 +515,10 @@ pub fn spawn_bullet(
 		.mass(0.1)
 		.user_data(entity.to_bits().get() as u128)
 		.active_events(ActiveEvents::COLLISION_EVENTS)
+		.collision_groups(InteractionGroups::new(
+			SMALL_GROUP,
+			PLAYER_GROUP | BIG_GROUP,
+		))
 		.build();
 	let ball_body_handle = physics.rigid_body_set.insert(rigid_body);
 	physics.collider_set.insert_with_parent(
@@ -953,7 +970,6 @@ impl Map
 										id,
 										other_id,
 									));
-									println!("Collided {}", state.hs.tick);
 									self.delayed_effects.push((
 										comps::Effect::GripperPierce {
 											old_vel: 0.75 * gripper_vel,
@@ -1009,11 +1025,21 @@ impl Map
 					{
 						if state.hs.time() >= gripper.time_to_grip
 						{
-							self.physics
+							let gripper_body = self
+								.physics
 								.rigid_body_set
 								.get_mut(gripper_physics.handle)
-								.unwrap()
-								.apply_impulse(forward, true);
+								.unwrap();
+							gripper_body.apply_impulse(forward, true);
+							for collider_handle in gripper_body.colliders()
+							{
+								let collider =
+									self.physics.collider_set.get_mut(*collider_handle).unwrap();
+								collider.set_collision_groups(InteractionGroups::new(
+									GRIPPER_GROUP,
+									BIG_GROUP,
+								));
+							}
 							if let Some(joint_handle) = gripper.attach_joint.take()
 							{
 								self.physics.impulse_joint_set.remove(joint_handle, true);
@@ -1106,7 +1132,6 @@ impl Map
 					}
 					comps::Effect::GripperPierce { old_vel } =>
 					{
-						println!("Effect {}", state.hs.tick);
 						if self.world.contains(other_id)
 						{
 							let mut attach_gripper = false;
