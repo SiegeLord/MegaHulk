@@ -274,6 +274,7 @@ pub fn spawn_robot(
 		comps::Controller::new(),
 		comps::Health::new(100.),
 		comps::AI::new(),
+		comps::Weapon::new(Vector3::new(0., 0., -1.)),
 	));
 
 	let rigid_body = RigidBodyBuilder::dynamic()
@@ -465,9 +466,51 @@ pub fn spawn_connector(
 	Ok(entity)
 }
 
-pub fn spawn_obj(pos: Point3<f32>, world: &mut hecs::World) -> Result<hecs::Entity>
+pub fn spawn_bullet(
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, vel: Vector3<f32>, parent: hecs::Entity,
+	physics: &mut Physics, world: &mut hecs::World, state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
 {
-	let entity = world.spawn((comps::Position::new(pos, UnitQuaternion::identity()),));
+	let scene = "data/gripper.glb";
+	game_state::cache_scene(state, scene)?;
+	let entity = world.spawn((
+		comps::Position::new(pos, rot),
+		comps::Scene {
+			scene: scene.to_string(),
+		},
+		comps::OnCollideEfffects::new(&[comps::Effect::Die, comps::Effect::Damage(10., parent)]),
+		comps::Light {
+			color: Color::from_rgb_f(1., 1., 0.),
+			intensity: 100.,
+			static_: false,
+		},
+	));
+	let rigid_body = RigidBodyBuilder::dynamic()
+		.translation(pos.coords)
+		.rotation(rot.scaled_axis())
+		.angular_damping(1.)
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let collider = ColliderBuilder::ball(0.2)
+		.restitution(0.8)
+		.mass(0.1)
+		.user_data(entity.to_bits().get() as u128)
+		.active_events(ActiveEvents::COLLISION_EVENTS)
+		.build();
+	let ball_body_handle = physics.rigid_body_set.insert(rigid_body);
+	physics.collider_set.insert_with_parent(
+		collider,
+		ball_body_handle,
+		&mut physics.rigid_body_set,
+	);
+
+	physics
+		.rigid_body_set
+		.get_mut(ball_body_handle)
+		.unwrap()
+		.apply_impulse(vel, true);
+
+	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
 	Ok(entity)
 }
 
@@ -553,7 +596,6 @@ impl Map
 	fn new(state: &mut game_state::GameState) -> Result<Self>
 	{
 		let mut world = hecs::World::new();
-		spawn_obj(Point3::new(0., 0., 0.), &mut world)?;
 
 		// ???
 		game_state::cache_scene(state, "data/test_level.glb")?;
@@ -597,6 +639,7 @@ impl Map
 	-> Result<Option<game_state::NextScreen>>
 	{
 		let mut to_die = vec![];
+		let mut effects = vec![];
 
 		// Position snapshotting.
 		for (_, position) in self.world.query::<&mut comps::Position>().iter()
@@ -675,6 +718,7 @@ impl Map
 				}
 				comps::AIState::Attacking(target) =>
 				{
+					controller.want_fire = false;
 					if let Ok(target_position) = self.world.get::<&comps::Position>(target)
 					{
 						let (forward, right, up) = get_dirs(position.rot);
@@ -694,6 +738,10 @@ impl Map
 							else if diff.norm() < 1.
 							{
 								controller.want_move.z = -1.;
+							}
+							else
+							{
+								controller.want_fire = true;
 							}
 						}
 					}
@@ -722,7 +770,7 @@ impl Map
 			//body.add_torque(-f * body.angvel(), true);
 		}
 
-		// Controller.
+		// Movement.
 		for (_, (controller, physics)) in self
 			.world
 			.query::<(&mut comps::Controller, &comps::Physics)>()
@@ -744,6 +792,35 @@ impl Map
 				DT * 3. * (rot * controller.want_rotate) + body.angvel(),
 				true,
 			);
+		}
+
+		let mut spawn_fns: Vec<
+			Box<dyn FnOnce(&mut Map, &mut game_state::GameState) -> Result<hecs::Entity>>,
+		> = vec![];
+		// Weapons.
+		for (id, (controller, weapon, position)) in self
+			.world
+			.query::<(&comps::Controller, &mut comps::Weapon, &comps::Position)>()
+			.iter()
+		{
+			if controller.want_fire && state.hs.time > weapon.time_to_fire
+			{
+				weapon.time_to_fire = state.hs.time + weapon.fire_delay;
+				let (forward, _, _) = get_dirs(position.rot);
+				let bullet_pos = position.pos + position.rot * weapon.offset;
+				let bullet_rot = position.rot;
+				spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
+					spawn_bullet(
+						bullet_pos,
+						bullet_rot,
+						forward,
+						id,
+						&mut map.physics,
+						&mut map.world,
+						state,
+					)
+				}));
+			}
 		}
 
 		// Physics.
@@ -769,6 +846,14 @@ impl Map
 					let id = hecs::Entity::from_bits(collider.user_data as u64).unwrap();
 					let other_id =
 						hecs::Entity::from_bits(other_collider.user_data as u64).unwrap();
+
+					if let Ok(on_collide_effects) = self.world.get::<&comps::OnCollideEfffects>(id)
+					{
+						for effect in &on_collide_effects.effects
+						{
+							effects.push((effect.clone(), id, other_id));
+						}
+					}
 
 					let mut attach_gripper = false;
 					if let Some(gripper) = self
@@ -834,9 +919,9 @@ impl Map
 							}
 							else
 							{
-								if let Some((target_physics, health)) = self
+								if let Some(target_physics) = self
 									.world
-									.query_one::<(&comps::Physics, &mut comps::Health)>(other_id)
+									.query_one::<&comps::Physics>(other_id)
 									.unwrap()
 									.get()
 								{
@@ -847,7 +932,11 @@ impl Map
 										.unwrap();
 									let dir = (target_body.translation() - gripper_pos).normalize();
 									let rel_vel = (gripper_vel - target_physics.old_vel).dot(&dir);
-									health.health -= rel_vel.max(0.);
+									effects.push((
+										comps::Effect::Damage(rel_vel.max(0.), gripper.parent),
+										id,
+										other_id,
+									));
 									attach_gripper = true;
 									gripper.status = comps::GripperStatus::AttachedToParent;
 									if let Some(connector_id) = gripper.connector
@@ -918,7 +1007,21 @@ impl Map
 							};
 							gripper.time_to_grip = state.hs.time() + 0.1;
 							gripper.status = comps::GripperStatus::Flying;
-							do_spawn_connector = true;
+							spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
+								let connector = spawn_connector(
+									id,
+									gripper_id,
+									gripper_offset,
+									Vector3::zeros(),
+									&mut map.world,
+									state,
+								)?;
+								map.world
+									.get::<&mut comps::Gripper>(gripper_id)
+									.unwrap()
+									.connector = Some(connector);
+								Ok(connector)
+							}));
 						}
 					}
 					comps::GripperStatus::Flying | comps::GripperStatus::AttachedToLevel =>
@@ -930,24 +1033,7 @@ impl Map
 						}
 						attach = true;
 					}
-					_ => (),
 				}
-			}
-			if do_spawn_connector
-			// TODO: spawn_fn?
-			{
-				let connector = spawn_connector(
-					id,
-					gripper_id,
-					gripper_offset,
-					Vector3::zeros(),
-					&mut self.world,
-					state,
-				)?;
-				self.world
-					.get::<&mut comps::Gripper>(gripper_id)
-					.unwrap()
-					.connector = Some(connector);
 			}
 			if attach
 			{
@@ -967,6 +1053,12 @@ impl Map
 			physics.old_vel = *body.linvel();
 		}
 
+		// Spawn fns;
+		for spawn_fn in spawn_fns
+		{
+			spawn_fn(self, state)?;
+		}
+
 		// Connector upkeep
 		for (id, connector) in self.world.query::<&comps::Connector>().iter()
 		{
@@ -982,6 +1074,25 @@ impl Map
 			if health.health <= 0.0
 			{
 				to_die.push(id);
+			}
+		}
+
+		// Effects.
+		for (effect, id, other_id) in effects
+		{
+			match effect
+			{
+				comps::Effect::Die =>
+				{
+					to_die.push(id);
+				}
+				comps::Effect::Damage(amount, _owner) =>
+				{
+					if let Ok(mut health) = self.world.get::<&mut comps::Health>(other_id)
+					{
+						health.health -= amount;
+					}
+				}
 			}
 		}
 

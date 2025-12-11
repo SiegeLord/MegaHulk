@@ -92,6 +92,7 @@ pub struct Controller
 	pub want_move: Vector3<f32>,
 	pub want_rotate: Vector3<f32>,
 	pub want_gripper: [bool; 2],
+	pub want_fire: bool,
 }
 
 impl Controller
@@ -102,6 +103,7 @@ impl Controller
 			want_move: Vector3::zeros(),
 			want_rotate: Vector3::zeros(),
 			want_gripper: [false, false],
+			want_fire: false,
 		}
 	}
 }
@@ -217,6 +219,49 @@ impl Health
 		Self {
 			health: max_health,
 			max_health: max_health,
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct Weapon
+{
+	pub time_to_fire: f64,
+	pub fire_delay: f64,
+	pub offset: Vector3<f32>,
+}
+
+impl Weapon
+{
+	pub fn new(offset: Vector3<f32>) -> Self
+	{
+		Self {
+			time_to_fire: 0.0,
+			fire_delay: 1.5,
+			offset: offset,
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub enum Effect
+{
+	Die,
+	Damage(f32, hecs::Entity),
+}
+
+#[derive(Debug, Clone)]
+pub struct OnCollideEfffects
+{
+	pub effects: Vec<Effect>,
+}
+
+impl OnCollideEfffects
+{
+	pub fn new(effects: &[Effect]) -> Self
+	{
+		Self {
+			effects: effects.to_owned(),
 		}
 	}
 }
