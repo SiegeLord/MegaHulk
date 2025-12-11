@@ -1,6 +1,7 @@
 use allegro::*;
 use nalgebra::{Point3, Quaternion, Unit, Vector3};
 use rand::prelude::*;
+use rapier3d::dynamics::ImpulseJointHandle;
 use slhack::sprite;
 
 #[derive(Debug, Copy, Clone)]
@@ -105,37 +106,53 @@ impl Controller
 	}
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum GripperStatus
+{
+	AttachedToParent,
+	AttachedToLevel,
+	Flying,
+}
+
 #[derive(Debug, Clone)]
 pub struct Gripper
 {
 	pub parent: hecs::Entity,
+	pub offset: Vector3<f32>,
+	pub status: GripperStatus,
+	pub time_to_grip: f64,
+	pub attach_joint: Option<ImpulseJointHandle>,
+	pub spring_joint: Option<ImpulseJointHandle>,
+	pub connector: Option<hecs::Entity>,
 }
 
 impl Gripper
 {
-	pub fn new(parent: hecs::Entity) -> Self
+	pub fn new(parent: hecs::Entity, offset: Vector3<f32>) -> Self
 	{
-		Self { parent: parent }
+		Self {
+			parent: parent,
+			offset: offset,
+			status: GripperStatus::AttachedToParent,
+			time_to_grip: 0.,
+			attach_joint: None,
+			spring_joint: None,
+			connector: None,
+		}
 	}
 }
 
 #[derive(Debug, Clone)]
 pub struct Grippers
 {
-	pub time_to_grip: [f64; 2],
-	pub grippers: [Option<hecs::Entity>; 2],
-	pub offsets: [Vector3<f32>; 2],
+	pub grippers: [hecs::Entity; 2],
 }
 
 impl Grippers
 {
-	pub fn new() -> Self
+	pub fn new(grippers: [hecs::Entity; 2]) -> Self
 	{
-		Self {
-			time_to_grip: [0.0, 0.0],
-			grippers: [None, None],
-			offsets: [Vector3::new(-0.5, 0., -1.0), Vector3::new(0.5, 0., -1.0)],
-		}
+		Self { grippers: grippers }
 	}
 }
 

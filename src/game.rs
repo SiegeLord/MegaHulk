@@ -3,6 +3,7 @@ use crate::game_state::DT;
 use crate::{components as comps, game_state, ui, utils};
 use allegro::*;
 use allegro_font::*;
+use itertools::Itertools;
 use na::{
 	Isometry3, Matrix4, Perspective3, Point2, Point3, RealField, Rotation2, Rotation3, Similarity3,
 	Unit, UnitQuaternion, Vector2, Vector3, Vector4,
@@ -10,9 +11,9 @@ use na::{
 use nalgebra as na;
 use rand::prelude::*;
 use rapier3d::dynamics::{
-	CCDSolver, FixedJointBuilder, ImpulseJointSet, IntegrationParameters, IslandManager,
-	MassProperties, MultibodyJointSet, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
-	SpringJointBuilder,
+	CCDSolver, FixedJointBuilder, ImpulseJointHandle, ImpulseJointSet, IntegrationParameters,
+	IslandManager, MassProperties, MultibodyJointSet, RigidBodyBuilder, RigidBodyHandle,
+	RigidBodySet, SpringJointBuilder,
 };
 use rapier3d::geometry::{
 	Ball, ColliderBuilder, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase,
@@ -283,7 +284,7 @@ pub fn spawn_robot(
 		.build();
 	let collider = ColliderBuilder::ball(0.5)
 		.restitution(0.1)
-		.mass(2.0)
+		.mass(1.0)
 		.friction(0.)
 		.user_data(entity.to_bits().get() as u128)
 		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
@@ -296,6 +297,51 @@ pub fn spawn_robot(
 	);
 	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
 	Ok(entity)
+}
+
+pub fn attach_gripper_to_parent(
+	gripper_id: hecs::Entity, world: &hecs::World, physics: &mut Physics,
+)
+{
+	let mut gripper_query = world
+		.query_one::<(&comps::Physics, &mut comps::Position, &mut comps::Gripper)>(gripper_id)
+		.unwrap();
+	let (gripper_physics, gripper_position, gripper) = gripper_query.get().unwrap();
+
+	if let Some(joint_handle) = gripper.attach_joint.take()
+	{
+		physics.impulse_joint_set.remove(joint_handle, true);
+	};
+	if let Some(joint_handle) = gripper.spring_joint.take()
+	{
+		physics.impulse_joint_set.remove(joint_handle, true);
+	};
+
+	let mut parent_query = world.query_one::<&comps::Physics>(gripper.parent).unwrap();
+	let parent_physics = parent_query.get().unwrap();
+	let parent_body = physics.rigid_body_set.get(parent_physics.handle).unwrap();
+
+	let desired_pos = parent_body.rotation() * gripper.offset + parent_body.translation();
+	let desired_rot = *parent_body.rotation();
+	let gripper_body = physics
+		.rigid_body_set
+		.get_mut(gripper_physics.handle)
+		.unwrap();
+	gripper_body.set_translation(desired_pos, true);
+	gripper_position.pos = Point3::origin() + desired_pos;
+	gripper_position.rot = desired_rot;
+	gripper_position.snapshot();
+
+	let joint = FixedJointBuilder::new()
+		.local_anchor1(gripper.offset.into())
+		.local_anchor2(Point3::origin());
+	let joint_handle = physics.impulse_joint_set.insert(
+		parent_physics.handle,
+		gripper_physics.handle,
+		joint,
+		true,
+	);
+	gripper.attach_joint = Some(joint_handle);
 }
 
 pub fn spawn_player(
@@ -311,7 +357,6 @@ pub fn spawn_player(
 		comps::Scene {
 			scene: scene.to_string(),
 		},
-		comps::Grippers::new(),
 		comps::Light {
 			color: Color::from_rgb_f(1., 1., 1.),
 			intensity: 300.,
@@ -343,14 +388,37 @@ pub fn spawn_player(
 		&mut physics.rigid_body_set,
 	);
 	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
+
+	let gripper_1 = spawn_gripper(
+		pos,
+		Vector3::new(-0.5, -0.3, -0.5),
+		entity,
+		physics,
+		world,
+		state,
+	)?;
+	let gripper_2 = spawn_gripper(
+		pos,
+		Vector3::new(0.5, -0.3, -0.5),
+		entity,
+		physics,
+		world,
+		state,
+	)?;
+
+	attach_gripper_to_parent(gripper_1, world, physics);
+	attach_gripper_to_parent(gripper_2, world, physics);
+	world.insert_one(entity, comps::Grippers::new([gripper_1, gripper_2]))?;
+
 	Ok(entity)
 }
 
 pub fn spawn_gripper(
-	pos: Point3<f32>, vel: Vector3<f32>, parent: hecs::Entity, physics: &mut Physics,
+	parent_pos: Point3<f32>, offset: Vector3<f32>, parent: hecs::Entity, physics: &mut Physics,
 	world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
+	let pos = parent_pos + offset;
 	let scene = "data/gripper.glb";
 	game_state::cache_scene(state, scene)?;
 	let entity = world.spawn((
@@ -358,7 +426,7 @@ pub fn spawn_gripper(
 		comps::Scene {
 			scene: scene.to_string(),
 		},
-		comps::Gripper::new(parent),
+		comps::Gripper::new(parent, offset),
 		comps::Light {
 			color: Color::from_rgb_f(0., 0., 1.),
 			intensity: 100.,
@@ -372,7 +440,7 @@ pub fn spawn_gripper(
 		.build();
 	let collider = ColliderBuilder::ball(0.2)
 		.restitution(0.8)
-		.mass(1.0)
+		.mass(0.1)
 		.user_data(entity.to_bits().get() as u128)
 		.active_events(ActiveEvents::COLLISION_EVENTS)
 		.build();
@@ -382,12 +450,6 @@ pub fn spawn_gripper(
 		ball_body_handle,
 		&mut physics.rigid_body_set,
 	);
-
-	physics
-		.rigid_body_set
-		.get_mut(ball_body_handle)
-		.unwrap()
-		.apply_impulse(vel, true);
 
 	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
 	Ok(entity)
@@ -656,6 +718,7 @@ impl Map
 			//body.add_force(-f * body.velocity_at_point(&position.pos), true);
 			//let f = 0.5;
 			//dbg!(body.angvel());
+			//dbg!(body.translation());
 			//body.add_torque(-f * body.angvel(), true);
 		}
 
@@ -707,9 +770,17 @@ impl Map
 					let other_id =
 						hecs::Entity::from_bits(other_collider.user_data as u64).unwrap();
 
-					if let Some(gripper) =
-						self.world.query_one::<&comps::Gripper>(id).unwrap().get()
+					let mut attach_gripper = false;
+					if let Some(gripper) = self
+						.world
+						.query_one::<&mut comps::Gripper>(id)
+						.unwrap()
+						.get()
 					{
+						if gripper.status != comps::GripperStatus::Flying
+						{
+							continue;
+						}
 						let gripper_vel = {
 							self.world
 								.query_one::<&mut comps::Physics>(id)
@@ -729,25 +800,37 @@ impl Map
 						{
 							if other_id == self.level
 							{
+								if let Some(joint_handle) = gripper.attach_joint.take()
+								{
+									self.physics.impulse_joint_set.remove(joint_handle, true);
+								};
+								if let Some(joint_handle) = gripper.spring_joint.take()
+								{
+									self.physics.impulse_joint_set.remove(joint_handle, true);
+								};
+
 								let joint = FixedJointBuilder::new()
 									.local_anchor1(Point3::new(0., 0., 0.))
 									.local_anchor2(Point3::origin() + body.translation());
-								self.physics.impulse_joint_set.insert(
+								let joint_handle = self.physics.impulse_joint_set.insert(
 									body_handle,
 									other_collider.parent().unwrap(),
 									joint,
 									true,
 								);
+								gripper.attach_joint = Some(joint_handle);
 
 								let joint = SpringJointBuilder::new(0.1, 30., 10.)
 									.local_anchor1(Point3::origin())
 									.local_anchor2(Point3::origin());
-								self.physics.impulse_joint_set.insert(
+								let joint_handle = self.physics.impulse_joint_set.insert(
 									body_handle,
 									parent_physics.handle,
 									joint,
 									true,
 								);
+								gripper.spring_joint = Some(joint_handle);
+								gripper.status = comps::GripperStatus::AttachedToLevel;
 							}
 							else
 							{
@@ -764,12 +847,20 @@ impl Map
 										.unwrap();
 									let dir = (target_body.translation() - gripper_pos).normalize();
 									let rel_vel = (gripper_vel - target_physics.old_vel).dot(&dir);
-									dbg!(rel_vel);
-									health.health -= 50.;
+									health.health -= rel_vel.max(0.);
+									attach_gripper = true;
+									gripper.status = comps::GripperStatus::AttachedToParent;
+									if let Some(connector_id) = gripper.connector
+									{
+										to_die.push(connector_id);
+									}
 								}
-								to_die.push(id);
 							}
 						}
+					}
+					if attach_gripper
+					{
+						attach_gripper_to_parent(id, &self.world, &mut self.physics);
 					}
 				}
 			}
@@ -777,7 +868,7 @@ impl Map
 
 		// Grippers.
 		// Do these after physics so we can compute the velocity correctly.
-		let mut to_spawn = vec![];
+		let mut want_grip = vec![];
 		for (id, (controller, position, grippers)) in self
 			.world
 			.query::<(
@@ -787,56 +878,81 @@ impl Map
 			)>()
 			.iter()
 		{
-			for (idx, (want_gripper, gripper, time_to_grip, offset)) in itertools::izip!(
-				&controller.want_gripper,
-				&mut grippers.grippers,
-				&mut grippers.time_to_grip,
-				&grippers.offsets
-			)
-			.enumerate()
+			for (want_gripper, gripper_id) in
+				itertools::izip!(&controller.want_gripper, &mut grippers.grippers,)
 			{
 				if *want_gripper
 				{
-					if let Some(gripper_id) = gripper
-					{
-						if self.world.contains(*gripper_id)
-						{
-							to_die.push(*gripper_id);
-						}
-						*gripper = None;
-					}
-					else
-					{
-						if state.hs.time() >= *time_to_grip
-						{
-							to_spawn.push((id, position.pos, position.rot, *offset, idx));
-							*time_to_grip = state.hs.time() + 0.5;
-						}
-					}
+					want_grip.push((id, *position, *gripper_id));
 				}
 			}
 		}
-		for (id, pos, rot, offset, idx) in to_spawn
+
+		for (id, parent_position, gripper_id) in want_grip
 		{
-			let (forward, _, _) = get_dirs(rot);
-			let gripper = spawn_gripper(
-				pos + rot * offset,
-				10. * forward,
-				id,
-				&mut self.physics,
-				&mut self.world,
-				state,
-			)?;
-			spawn_connector(
-				id,
-				gripper,
-				offset,
-				Vector3::zeros(),
-				&mut self.world,
-				state,
-			)?;
-			let mut grippers = self.world.get::<&mut comps::Grippers>(id).unwrap();
-			grippers.grippers[idx] = Some(gripper);
+			let mut do_spawn_connector = false;
+			let mut attach = false;
+			let gripper_offset;
+			{
+				let mut gripper_query = self
+					.world
+					.query_one::<(&comps::Physics, &mut comps::Gripper)>(gripper_id)
+					.unwrap();
+				let (gripper_physics, gripper) = gripper_query.get().unwrap();
+				let (forward, _, _) = get_dirs(parent_position.rot);
+				gripper_offset = gripper.offset;
+				match gripper.status
+				{
+					comps::GripperStatus::AttachedToParent =>
+					{
+						if state.hs.time() >= gripper.time_to_grip
+						{
+							self.physics
+								.rigid_body_set
+								.get_mut(gripper_physics.handle)
+								.unwrap()
+								.apply_impulse(forward, true);
+							if let Some(joint_handle) = gripper.attach_joint.take()
+							{
+								self.physics.impulse_joint_set.remove(joint_handle, true);
+							};
+							gripper.time_to_grip = state.hs.time() + 0.1;
+							gripper.status = comps::GripperStatus::Flying;
+							do_spawn_connector = true;
+						}
+					}
+					comps::GripperStatus::Flying | comps::GripperStatus::AttachedToLevel =>
+					{
+						gripper.status = comps::GripperStatus::AttachedToParent;
+						if let Some(connector_id) = gripper.connector
+						{
+							to_die.push(connector_id);
+						}
+						attach = true;
+					}
+					_ => (),
+				}
+			}
+			if do_spawn_connector
+			// TODO: spawn_fn?
+			{
+				let connector = spawn_connector(
+					id,
+					gripper_id,
+					gripper_offset,
+					Vector3::zeros(),
+					&mut self.world,
+					state,
+				)?;
+				self.world
+					.get::<&mut comps::Gripper>(gripper_id)
+					.unwrap()
+					.connector = Some(connector);
+			}
+			if attach
+			{
+				attach_gripper_to_parent(gripper_id, &self.world, &mut self.physics);
+			}
 		}
 
 		// Physics -> position sync.
@@ -855,6 +971,15 @@ impl Map
 		for (id, connector) in self.world.query::<&comps::Connector>().iter()
 		{
 			if !self.world.contains(connector.start) || !self.world.contains(connector.end)
+			{
+				to_die.push(id);
+			}
+		}
+
+		// Health.
+		for (id, health) in self.world.query::<&mut comps::Health>().iter()
+		{
+			if health.health <= 0.0
 			{
 				to_die.push(id);
 			}
@@ -901,9 +1026,11 @@ impl Map
 
 	fn make_camera(&self, alpha: f32) -> Isometry3<f32>
 	{
+		//let (forward, _, up) = get_dirs(self.camera_target.draw_rot(alpha));
 		Isometry3 {
 			rotation: self.camera_target.draw_rot(alpha),
 			translation: self.camera_target.draw_pos(alpha).coords.into(),
+			//translation: (self.camera_target.draw_pos(alpha).coords - 2. * forward + 0.5 * up).into(),
 		}
 		.inverse()
 	}
