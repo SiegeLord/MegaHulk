@@ -271,8 +271,10 @@ pub fn spawn_robot(
 			scene: scene.to_string(),
 		},
 		comps::Controller::new(),
+		comps::Health::new(100.),
 		comps::AI::new(),
 	));
+
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
 		.angular_damping(10.)
@@ -292,12 +294,7 @@ pub fn spawn_robot(
 		ball_body_handle,
 		&mut physics.rigid_body_set,
 	);
-	world.insert_one(
-		entity,
-		comps::Physics {
-			handle: ball_body_handle,
-		},
-	)?;
+	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
 	Ok(entity)
 }
 
@@ -345,12 +342,7 @@ pub fn spawn_player(
 		ball_body_handle,
 		&mut physics.rigid_body_set,
 	);
-	world.insert_one(
-		entity,
-		comps::Physics {
-			handle: ball_body_handle,
-		},
-	)?;
+	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
 	Ok(entity)
 }
 
@@ -397,12 +389,7 @@ pub fn spawn_gripper(
 		.unwrap()
 		.apply_impulse(vel, true);
 
-	world.insert_one(
-		entity,
-		comps::Physics {
-			handle: ball_body_handle,
-		},
-	)?;
+	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
 	Ok(entity)
 }
 
@@ -486,12 +473,7 @@ pub fn spawn_level(
 		rigid_body_handle,
 		&mut physics.rigid_body_set,
 	);
-	world.insert_one(
-		entity,
-		comps::Physics {
-			handle: rigid_body_handle,
-		},
-	)?;
+	world.insert_one(entity, comps::Physics::new(rigid_body_handle))?;
 	Ok(entity)
 }
 
@@ -602,7 +584,7 @@ impl Map
 				.enumerate()
 			{
 				controller.want_gripper[idx] = state.controls.get_action_state(*action) > 0.5;
-				state.controls.clear_action_state(*action);
+				state.controls.clear_action_state(*action); // TODO: Rework
 			}
 
 			self.camera_target.pos = position.pos;
@@ -662,12 +644,12 @@ impl Map
 		}
 
 		// Friction + force resetting.
-		for (_, (position, physics)) in self
+		for (_, (_position, physics)) in self
 			.world
 			.query::<(&comps::Position, &mut comps::Physics)>()
 			.iter()
 		{
-			let f = 0.9;
+			//let f = 0.9;
 			let body = &mut self.physics.rigid_body_set[physics.handle];
 			body.reset_forces(true);
 			body.reset_torques(true);
@@ -701,7 +683,100 @@ impl Map
 			);
 		}
 
+		// Physics.
+		let handler = PhysicsEventHandler::new();
+		self.physics.step(&handler);
+
+		for (event, _contact_pair) in handler.collision_events.try_read().unwrap().iter()
+		{
+			if let CollisionEvent::Started(collider_handle_1, collider_handle_2, _) = event
+			{
+				for (collider_handle, other_collider_handle) in [
+					(*collider_handle_1, *collider_handle_2),
+					(*collider_handle_2, *collider_handle_1),
+				]
+				{
+					let collider = self.physics.collider_set.get(collider_handle).unwrap();
+					let other_collider = self
+						.physics
+						.collider_set
+						.get(other_collider_handle)
+						.unwrap();
+					let body_handle = collider.parent().unwrap();
+					let id = hecs::Entity::from_bits(collider.user_data as u64).unwrap();
+					let other_id =
+						hecs::Entity::from_bits(other_collider.user_data as u64).unwrap();
+
+					if let Some(gripper) =
+						self.world.query_one::<&comps::Gripper>(id).unwrap().get()
+					{
+						let gripper_vel = {
+							self.world
+								.query_one::<&mut comps::Physics>(id)
+								.unwrap()
+								.get()
+								.unwrap()
+								.old_vel
+						};
+
+						let body = self.physics.rigid_body_set.get_mut(body_handle).unwrap();
+						let gripper_pos = *body.translation();
+						if let Some(parent_physics) = self
+							.world
+							.query_one::<&mut comps::Physics>(gripper.parent)
+							.unwrap()
+							.get()
+						{
+							if other_id == self.level
+							{
+								let joint = FixedJointBuilder::new()
+									.local_anchor1(Point3::new(0., 0., 0.))
+									.local_anchor2(Point3::origin() + body.translation());
+								self.physics.impulse_joint_set.insert(
+									body_handle,
+									other_collider.parent().unwrap(),
+									joint,
+									true,
+								);
+
+								let joint = SpringJointBuilder::new(0.1, 30., 10.)
+									.local_anchor1(Point3::origin())
+									.local_anchor2(Point3::origin());
+								self.physics.impulse_joint_set.insert(
+									body_handle,
+									parent_physics.handle,
+									joint,
+									true,
+								);
+							}
+							else
+							{
+								if let Some((target_physics, health)) = self
+									.world
+									.query_one::<(&comps::Physics, &mut comps::Health)>(other_id)
+									.unwrap()
+									.get()
+								{
+									let target_body = self
+										.physics
+										.rigid_body_set
+										.get(target_physics.handle)
+										.unwrap();
+									let dir = (target_body.translation() - gripper_pos).normalize();
+									let rel_vel = (gripper_vel - target_physics.old_vel).dot(&dir);
+									dbg!(rel_vel);
+									health.health -= 50.;
+								}
+								to_die.push(id);
+							}
+						}
+					}
+				}
+			}
+		}
+
 		// Grippers.
+		// Do these after physics so we can compute the velocity correctly.
 		let mut to_spawn = vec![];
 		for (id, (controller, position, grippers)) in self
 			.world
@@ -735,7 +810,7 @@ impl Map
 						if state.hs.time() >= *time_to_grip
 						{
 							to_spawn.push((id, position.pos, position.rot, *offset, idx));
-							*time_to_grip = state.hs.time() + 0.1;
+							*time_to_grip = state.hs.time() + 0.5;
 						}
 					}
 				}
@@ -764,88 +839,16 @@ impl Map
 			grippers.grippers[idx] = Some(gripper);
 		}
 
-		// Physics.
-		let handler = PhysicsEventHandler::new();
-		self.physics.step(&handler);
-
-		for (event, _contact_pair) in handler.collision_events.try_read().unwrap().iter()
-		{
-			//if let Some(contact_pair) = contact_pair
-			//	&& contact_pair.has_any_active_contact
-			if let CollisionEvent::Started(collider_handle_1, collider_handle_2, _) = event
-			{
-				//let collider_handle_1 = contact_pair.collider1;
-				//let collider_handle_2 = contact_pair.collider2;
-				let collider1 = self.physics.collider_set.get(*collider_handle_1).unwrap();
-				let collider2 = self.physics.collider_set.get(*collider_handle_2).unwrap();
-				let body_handle_1 = collider1.parent().unwrap();
-				let body_handle_2 = collider2.parent().unwrap();
-				let id1 = hecs::Entity::from_bits(collider1.user_data as u64).unwrap();
-				let id2 = hecs::Entity::from_bits(collider2.user_data as u64).unwrap();
-
-				let (_, id, level_body_handle, body_handle) = if id1 == self.level
-				{
-					(id1, id2, body_handle_1, body_handle_2)
-				}
-				else if id2 == self.level
-				{
-					(id1, id2, body_handle_2, body_handle_1)
-				}
-				else
-				{
-					if self.world.get::<&comps::Gripper>(id1).is_ok()
-					{
-						to_die.push(id1);
-					}
-					if self.world.get::<&comps::Gripper>(id2).is_ok()
-					{
-						to_die.push(id2);
-					}
-					continue;
-				};
-
-				if let Some(gripper) = self.world.query_one::<&comps::Gripper>(id).unwrap().get()
-				{
-					let body = self.physics.rigid_body_set.get_mut(body_handle).unwrap();
-
-					let joint = FixedJointBuilder::new()
-						.local_anchor1(Point3::new(0., 0., 0.))
-						.local_anchor2(Point3::origin() + body.translation());
-					self.physics.impulse_joint_set.insert(
-						body_handle,
-						level_body_handle,
-						joint,
-						true,
-					);
-
-					if let Some(physics) = self
-						.world
-						.query_one::<&mut comps::Physics>(gripper.parent)
-						.unwrap()
-						.get()
-					{
-						let joint = SpringJointBuilder::new(0.1, 30., 10.)
-							.local_anchor1(Point3::origin())
-							.local_anchor2(Point3::origin());
-						self.physics.impulse_joint_set.insert(
-							body_handle,
-							physics.handle,
-							joint,
-							true,
-						);
-					}
-				}
-			}
-		}
-
+		// Physics -> position sync.
 		for (_id, (position, physics)) in self
 			.world
-			.query::<(&mut comps::Position, &comps::Physics)>()
+			.query::<(&mut comps::Position, &mut comps::Physics)>()
 			.iter()
 		{
 			let body = &self.physics.rigid_body_set[physics.handle];
 			position.pos = Point3::from(*body.translation());
 			position.rot = *body.rotation();
+			physics.old_vel = *body.linvel();
 		}
 
 		// Connector upkeep

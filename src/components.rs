@@ -71,6 +71,18 @@ pub struct Scene
 pub struct Physics
 {
 	pub handle: rapier3d::dynamics::RigidBodyHandle,
+	pub old_vel: Vector3<f32>,
+}
+
+impl Physics
+{
+	pub fn new(handle: rapier3d::dynamics::RigidBodyHandle) -> Self
+	{
+		Self {
+			handle,
+			old_vel: Vector3::zeros(),
+		}
+	}
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -170,6 +182,24 @@ impl AI
 	{
 		Self {
 			state: AIState::Idle,
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct Health
+{
+	pub health: f32,
+	pub max_health: f32,
+}
+
+impl Health
+{
+	pub fn new(max_health: f32) -> Self
+	{
+		Self {
+			health: max_health,
+			max_health: max_health,
 		}
 	}
 }
