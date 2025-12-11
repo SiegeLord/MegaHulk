@@ -247,7 +247,15 @@ impl Weapon
 pub enum Effect
 {
 	Die,
-	Damage(f32, hecs::Entity),
+	Damage
+	{
+		amount: f32,
+		owner: hecs::Entity,
+	},
+	GripperPierce
+	{
+		old_vel: Vector3<f32>,
+	},
 }
 
 #[derive(Debug, Clone)]

@@ -272,7 +272,7 @@ pub fn spawn_robot(
 			scene: scene.to_string(),
 		},
 		comps::Controller::new(),
-		comps::Health::new(100.),
+		comps::Health::new(55.),
 		comps::AI::new(),
 		comps::Weapon::new(Vector3::new(0., 0., -1.)),
 	));
@@ -478,7 +478,13 @@ pub fn spawn_bullet(
 		comps::Scene {
 			scene: scene.to_string(),
 		},
-		comps::OnCollideEfffects::new(&[comps::Effect::Die, comps::Effect::Damage(10., parent)]),
+		comps::OnCollideEfffects::new(&[
+			comps::Effect::Die,
+			comps::Effect::Damage {
+				amount: 10.,
+				owner: parent,
+			},
+		]),
 		comps::Light {
 			color: Color::from_rgb_f(1., 1., 0.),
 			intensity: 100.,
@@ -589,6 +595,7 @@ struct Map
 	camera_target: comps::Position,
 	player: hecs::Entity,
 	level: hecs::Entity,
+	delayed_effects: Vec<(comps::Effect, hecs::Entity, hecs::Entity)>,
 }
 
 impl Map
@@ -623,6 +630,7 @@ impl Map
 
 		let mut physics = Physics::new();
 		spawn_robot(Point3::new(2.5, 2.5, 1.), &mut physics, &mut world, state)?;
+		spawn_robot(Point3::new(2.5, 1.5, 0.), &mut physics, &mut world, state)?;
 		let player = spawn_player(Point3::new(2., 2.5, 4.), &mut physics, &mut world, state)?;
 		let level = spawn_level("data/test_level.glb", state, &mut physics, &mut world)?;
 
@@ -632,6 +640,7 @@ impl Map
 			camera_target: comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
 			player: player,
 			level: level,
+			delayed_effects: vec![],
 		})
 	}
 
@@ -640,6 +649,7 @@ impl Map
 	{
 		let mut to_die = vec![];
 		let mut effects = vec![];
+		std::mem::swap(&mut self.delayed_effects, &mut effects);
 
 		// Position snapshotting.
 		for (_, position) in self.world.query::<&mut comps::Position>().iter()
@@ -744,6 +754,10 @@ impl Map
 								controller.want_fire = true;
 							}
 						}
+					}
+					else
+					{
+						new_state = Some(comps::AIState::Idle);
 					}
 				}
 			}
@@ -855,7 +869,6 @@ impl Map
 						}
 					}
 
-					let mut attach_gripper = false;
 					if let Some(gripper) = self
 						.world
 						.query_one::<&mut comps::Gripper>(id)
@@ -933,23 +946,24 @@ impl Map
 									let dir = (target_body.translation() - gripper_pos).normalize();
 									let rel_vel = (gripper_vel - target_physics.old_vel).dot(&dir);
 									effects.push((
-										comps::Effect::Damage(rel_vel.max(0.), gripper.parent),
+										comps::Effect::Damage {
+											amount: rel_vel.max(0.),
+											owner: gripper.parent,
+										},
 										id,
 										other_id,
 									));
-									attach_gripper = true;
-									gripper.status = comps::GripperStatus::AttachedToParent;
-									if let Some(connector_id) = gripper.connector
-									{
-										to_die.push(connector_id);
-									}
+									println!("Collided {}", state.hs.tick);
+									self.delayed_effects.push((
+										comps::Effect::GripperPierce {
+											old_vel: 0.75 * gripper_vel,
+										},
+										id,
+										other_id,
+									));
 								}
 							}
 						}
-					}
-					if attach_gripper
-					{
-						attach_gripper_to_parent(id, &self.world, &mut self.physics);
 					}
 				}
 			}
@@ -979,7 +993,6 @@ impl Map
 
 		for (id, parent_position, gripper_id) in want_grip
 		{
-			let mut do_spawn_connector = false;
 			let mut attach = false;
 			let gripper_offset;
 			{
@@ -1068,32 +1081,71 @@ impl Map
 			}
 		}
 
-		// Health.
-		for (id, health) in self.world.query::<&mut comps::Health>().iter()
+		while !effects.is_empty()
 		{
-			if health.health <= 0.0
+			let new_effects = vec![];
+			// Effects.
+			for (effect, id, other_id) in effects.drain(..)
 			{
-				to_die.push(id);
-			}
-		}
-
-		// Effects.
-		for (effect, id, other_id) in effects
-		{
-			match effect
-			{
-				comps::Effect::Die =>
+				match effect
 				{
-					to_die.push(id);
-				}
-				comps::Effect::Damage(amount, _owner) =>
-				{
-					if let Ok(mut health) = self.world.get::<&mut comps::Health>(other_id)
+					comps::Effect::Die =>
 					{
-						health.health -= amount;
+						to_die.push(id);
+					}
+					comps::Effect::Damage { amount, owner } =>
+					{
+						if let Ok(mut health) = self.world.get::<&mut comps::Health>(other_id)
+						{
+							health.health -= amount;
+						}
+						if let Ok(mut ai) = self.world.get::<&mut comps::AI>(other_id)
+						{
+							ai.state = comps::AIState::Attacking(owner);
+						}
+					}
+					comps::Effect::GripperPierce { old_vel } =>
+					{
+						println!("Effect {}", state.hs.tick);
+						if self.world.contains(other_id)
+						{
+							let mut attach_gripper = false;
+							if let Ok(mut gripper) = self.world.get::<&mut comps::Gripper>(id)
+							{
+								attach_gripper = true;
+								gripper.status = comps::GripperStatus::AttachedToParent;
+								if let Some(connector_id) = gripper.connector
+								{
+									to_die.push(connector_id);
+								}
+							}
+							if attach_gripper
+							{
+								attach_gripper_to_parent(id, &self.world, &mut self.physics);
+							}
+						}
+						else
+						{
+							if let Ok(physics) = self.world.get::<&comps::Physics>(id)
+							{
+								let body =
+									self.physics.rigid_body_set.get_mut(physics.handle).unwrap();
+								body.set_linvel(old_vel, true);
+							}
+						}
 					}
 				}
 			}
+
+			// Health.
+			for (id, health) in self.world.query::<&mut comps::Health>().iter()
+			{
+				if health.health <= 0.0
+				{
+					to_die.push(id);
+				}
+			}
+			effects = new_effects;
 		}
 
 		// Remove dead entities
