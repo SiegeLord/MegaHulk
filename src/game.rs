@@ -1066,7 +1066,7 @@ impl Map
 					comps::GripperStatus::Flying | comps::GripperStatus::AttachedToLevel =>
 					{
 						gripper.status = comps::GripperStatus::AttachedToParent;
-						if let Some(connector_id) = gripper.connector
+						if let Some(connector_id) = gripper.connector.take()
 						{
 							to_die.push(connector_id);
 						}
@@ -1139,7 +1139,7 @@ impl Map
 							{
 								attach_gripper = true;
 								gripper.status = comps::GripperStatus::AttachedToParent;
-								if let Some(connector_id) = gripper.connector
+								if let Some(connector_id) = gripper.connector.take()
 								{
 									to_die.push(connector_id);
 								}
