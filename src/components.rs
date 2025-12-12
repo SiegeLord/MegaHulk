@@ -21,18 +21,18 @@ pub struct Position
 	pub rot: Unit<Quaternion<f32>>,
 	old_rot: Unit<Quaternion<f32>>,
 
-	pub scale: f32,
-	old_scale: f32,
+	pub scale: Vector3<f32>,
+	old_scale: Vector3<f32>,
 }
 
 impl Position
 {
 	pub fn new(pos: Point3<f32>, rot: Unit<Quaternion<f32>>) -> Self
 	{
-		Self::new_scaled(pos, rot, 1.0)
+		Self::new_scaled(pos, rot, Vector3::new(1., 1., 1.))
 	}
 
-	pub fn new_scaled(pos: Point3<f32>, rot: Unit<Quaternion<f32>>, scale: f32) -> Self
+	pub fn new_scaled(pos: Point3<f32>, rot: Unit<Quaternion<f32>>, scale: Vector3<f32>) -> Self
 	{
 		Self {
 			pos: pos,
@@ -61,7 +61,7 @@ impl Position
 		self.old_rot.slerp(&self.rot, alpha)
 	}
 
-	pub fn draw_scale(&self, alpha: f32) -> f32
+	pub fn draw_scale(&self, alpha: f32) -> Vector3<f32>
 	{
 		self.scale + alpha * (self.scale - self.old_scale)
 	}

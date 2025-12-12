@@ -436,7 +436,7 @@ pub fn spawn_gripper(
 		comps::Scene::new(scene_name),
 		comps::Gripper::new(parent, offset),
 		comps::Light {
-			color: Color::from_rgb_f(0., 0., 1.),
+			color: Color::from_rgb_f(0., 1., 0.),
 			intensity: 100.,
 			static_: false,
 		},
@@ -468,8 +468,15 @@ pub fn spawn_connector(
 	world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	game_state::cache_scene(state, "data/connector.glb")?;
-	let entity = world.spawn((comps::Connector::new(start, end, start_offset, end_offset),));
+	let scene_name = "data/connector.glb";
+	game_state::cache_scene(state, scene_name)?;
+	let mut scene = comps::AdditiveScene::new(scene_name);
+	scene.color = Color::from_rgb_f(0.0, 0.5, 0.0);
+	let entity = world.spawn((
+		comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
+		comps::Connector::new(start, end, start_offset, end_offset),
+		scene,
+	));
 	Ok(entity)
 }
 
@@ -483,7 +490,7 @@ pub fn spawn_hit(
 	scene.color = Color::from_rgb_f(0.5, 0.5, 0.);
 	game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
-		comps::Position::new_scaled(pos, rot, 0.1),
+		comps::Position::new_scaled(pos, rot, Vector3::from_element(1.)),
 		scene,
 		comps::ExplosionScaling::new(state.hs.time() + 0.2),
 	));
@@ -810,7 +817,7 @@ impl Map
 			{
 				to_die.push(id);
 			}
-			position.scale += 4. * DT;
+			position.scale += Vector3::from_element(4. * DT);
 		}
 
 		// Friction + force resetting.
@@ -1126,12 +1133,48 @@ impl Map
 		}
 
 		// Connector upkeep
-		for (id, connector) in self.world.query::<&comps::Connector>().iter()
+		let mut connector_ends = vec![];
+		for (id, (connector, _)) in self
+			.world
+			.query::<(&comps::Connector, &mut comps::Position)>()
+			.iter()
 		{
-			if !self.world.contains(connector.start) || !self.world.contains(connector.end)
+			if let (Ok(start_position), Ok(end_position)) = (
+				self.world.get::<&comps::Position>(connector.start),
+				self.world.get::<&comps::Position>(connector.end),
+			)
+			{
+				connector_ends.push((start_position.clone(), end_position.clone()))
+			}
+			else
 			{
 				to_die.push(id);
 			}
+		}
+
+		// Is this valid?
+		for ((_, (connector, position)), (start_position, end_position)) in itertools::izip!(
+			self.world
+				.query::<(&comps::Connector, &mut comps::Position)>()
+				.iter(),
+			connector_ends
+		)
+		{
+			let start_pos = start_position.pos + start_position.rot * connector.start_offset;
+			let end_pos = end_position.pos + end_position.rot * connector.end_offset;
+
+			let dir = (end_pos - start_pos).normalize();
+			let rot = UnitQuaternion::from_axis_angle(
+				&Unit::new_unchecked(dir),
+				5. * state.hs.time() as f32,
+			);
+			let new_pos = ((start_pos.coords + end_pos.coords) / 2.0).into();
+			let new_rot = rot * UnitQuaternion::face_towards(&dir, &Vector3::y());
+			let new_scale = Vector3::new(1., 1., (start_pos - end_pos).norm() / 2.);
+
+			position.pos = new_pos;
+			position.rot = new_rot;
+			position.scale = new_scale;
 		}
 
 		while !effects.is_empty()
@@ -1347,7 +1390,7 @@ impl Map
 				rotation: position.draw_rot(alpha),
 			}
 			.to_homogeneous();
-			let scale = Similarity3::from_scaling(position.draw_scale(alpha)).to_homogeneous();
+			let scale = Matrix4::new_nonuniform_scaling(&position.draw_scale(alpha));
 
 			state.hs.core.use_transform(&utils::mat4_to_transform(
 				camera.to_homogeneous() * shift * scale,
@@ -1372,52 +1415,6 @@ impl Map
 				&state.hs.prim,
 				material_mapper,
 			);
-		}
-
-		// Connectors
-		for (_, connector) in self.world.query::<&comps::Connector>().iter()
-		{
-			if let (Ok(start_pos), Ok(end_pos)) = (
-				self.world.get::<&comps::Position>(connector.start),
-				self.world.get::<&comps::Position>(connector.end),
-			)
-			{
-				let start_pos =
-					start_pos.draw_pos(alpha) + start_pos.draw_rot(alpha) * connector.start_offset;
-				let end_pos =
-					end_pos.draw_pos(alpha) + end_pos.draw_rot(alpha) * connector.end_offset;
-
-				let dir = (end_pos - start_pos).normalize();
-				let rot = UnitQuaternion::from_axis_angle(
-					&Unit::new_unchecked(dir),
-					5. * state.hs.time() as f32,
-				);
-				let shift = Isometry3 {
-					translation: ((start_pos.coords + end_pos.coords) / 2.0).into(),
-					rotation: rot * UnitQuaternion::face_towards(&dir, &Vector3::y()),
-				}
-				.to_homogeneous();
-				let scale = Matrix4::new_nonuniform_scaling(&Vector3::new(
-					1.,
-					1.,
-					(start_pos - end_pos).norm() / 2.,
-				));
-
-				state.hs.core.use_transform(&utils::mat4_to_transform(
-					camera.to_homogeneous() * shift * scale,
-				));
-				state
-					.hs
-					.core
-					.set_shader_transform("model_matrix", &utils::mat4_to_transform(shift * scale))
-					.ok();
-
-				state.get_scene("data/connector.glb").unwrap().draw(
-					&state.hs.core,
-					&state.hs.prim,
-					material_mapper,
-				);
-			}
 		}
 
 		// Light pass.
@@ -1524,7 +1521,7 @@ impl Map
 				rotation: position.draw_rot(alpha),
 			}
 			.to_homogeneous();
-			let scale = Similarity3::from_scaling(position.draw_scale(alpha)).to_homogeneous();
+			let scale = Matrix4::new_nonuniform_scaling(&position.draw_scale(alpha));
 
 			state.hs.core.use_transform(&utils::mat4_to_transform(
 				camera.to_homogeneous() * shift * scale,
