@@ -683,6 +683,7 @@ impl Map
 		let mut physics = Physics::new();
 		spawn_robot(Point3::new(2.5, 2.5, 1.), &mut physics, &mut world, state)?;
 		spawn_robot(Point3::new(2.5, 1.5, 0.), &mut physics, &mut world, state)?;
+		spawn_robot(Point3::new(1.5, 1.5, 0.), &mut physics, &mut world, state)?;
 		let player = spawn_player(Point3::new(2., 2.5, 4.), &mut physics, &mut world, state)?;
 		let level = spawn_level("data/test_level.glb", state, &mut physics, &mut world)?;
 
