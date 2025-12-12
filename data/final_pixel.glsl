@@ -23,7 +23,7 @@ void main()
     float specular = light_color.w;
     out_color = vec4(final_light_color * color.xyz + 1. * vec3(specular), 1.);
     //out_color = vec4(final_light_color, 1.);
-	//out_color = vec4(mod(pos.xyz, 1), 1);
+    //out_color = vec4(mod(pos.xyz, 1), 1);
     //out_color = vec4(normal, 1);
     //out_color = vec4(1., material, 0., 1.);
 }

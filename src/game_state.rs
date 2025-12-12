@@ -24,6 +24,25 @@ pub enum MaterialKind
 	Dynamic = 1,
 	Fullbright = 2,
 	DynamicWithLightmap = 3,
+	NumMaterials = 4,
+}
+
+pub fn shader_replacements() -> Vec<(&'static str, &'static str)>
+{
+	let mut ret = vec![];
+	for i in 0..MaterialKind::NumMaterials as i32
+	{
+		let variant = unsafe { std::mem::transmute(i) };
+		ret.push(match variant
+		{
+			MaterialKind::Static => ("STATIC_MATERIAL", "0"),
+			MaterialKind::Dynamic => ("DYNAMIC_MATERIAL", "1"),
+			MaterialKind::Fullbright => ("FULLBRIGHT_MATERIAL", "2"),
+			MaterialKind::DynamicWithLightmap => ("DYNAMIC_WITH_LIGHTMAP_MATERIAL", "3"),
+			MaterialKind::NumMaterials => unreachable!(),
+		});
+	}
+	ret
 }
 
 impl Into<i32> for MaterialKind
@@ -47,6 +66,7 @@ pub enum Action
 	RotateDown,
 	GripLeft,
 	GripRight,
+	Pause,
 }
 
 impl controls::Action for Action
@@ -65,6 +85,7 @@ impl controls::Action for Action
 			Action::RotateDown => "Rotate Down",
 			Action::GripLeft => "Grip Left",
 			Action::GripRight => "Grip Right",
+			Action::Pause => "Pause",
 		}
 	}
 }
@@ -103,6 +124,11 @@ pub fn new_game_controls() -> controls::Controls<Action>
 	action_to_inputs.insert(
 		Action::GripRight,
 		[Some(controls::Input::MouseButton(2)), None],
+	);
+
+	action_to_inputs.insert(
+		Action::Pause,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::P)), None],
 	);
 
 	controls::Controls::new(action_to_inputs)
@@ -163,6 +189,7 @@ pub struct GameState
 
 	pub basic_shader: Option<Shader>,
 	pub forward_shader: Option<Shader>,
+	pub forward2_shader: Option<Shader>,
 	pub light_shader: Option<Shader>,
 	pub final_shader: Option<Shader>,
 	pub deferred_renderer: Option<deferred::DeferredRenderer>,
@@ -212,6 +239,7 @@ impl GameState
 			controls: controls,
 			basic_shader: None,
 			forward_shader: None,
+			forward2_shader: None,
 			light_shader: None,
 			final_shader: None,
 			deferred_renderer: None,

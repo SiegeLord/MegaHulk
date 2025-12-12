@@ -270,13 +270,11 @@ pub fn spawn_robot(
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scene = "data/robot1.glb";
-	game_state::cache_scene(state, scene)?;
+	let scene_name = "data/robot1.glb";
+	game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
 		comps::Position::new(pos, UnitQuaternion::identity()),
-		comps::Scene {
-			scene: scene.to_string(),
-		},
+		comps::Scene::new(scene_name),
 		comps::Controller::new(),
 		comps::Health::new(55.),
 		comps::AI::new(),
@@ -362,14 +360,12 @@ pub fn spawn_player(
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scene = "data/test.glb";
-	game_state::cache_scene(state, scene)?;
+	let scene_name = "data/test.glb";
+	game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
 		comps::Position::new(pos, UnitQuaternion::identity()),
 		comps::Controller::new(),
-		comps::Scene {
-			scene: scene.to_string(),
-		},
+		comps::Scene::new(scene_name),
 		comps::Light {
 			color: Color::from_rgb_f(1., 1., 1.),
 			intensity: 300.,
@@ -433,13 +429,11 @@ pub fn spawn_gripper(
 ) -> Result<hecs::Entity>
 {
 	let pos = parent_pos + offset;
-	let scene = "data/gripper.glb";
-	game_state::cache_scene(state, scene)?;
+	let scene_name = "data/gripper.glb";
+	game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
 		comps::Position::new(pos, UnitQuaternion::identity()),
-		comps::Scene {
-			scene: scene.to_string(),
-		},
+		comps::Scene::new(scene_name),
 		comps::Gripper::new(parent, offset),
 		comps::Light {
 			color: Color::from_rgb_f(0., 0., 1.),
@@ -479,24 +473,40 @@ pub fn spawn_connector(
 	Ok(entity)
 }
 
+pub fn spawn_hit(
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, world: &mut hecs::World,
+	state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene_name = "data/hit.glb";
+	let mut scene = comps::AdditiveScene::new(scene_name);
+	scene.color = Color::from_rgb_f(0.5, 0.5, 0.);
+	game_state::cache_scene(state, scene_name)?;
+	let entity = world.spawn((
+		comps::Position::new_scaled(pos, rot, 0.1),
+		scene,
+		comps::ExplosionScaling::new(state.hs.time() + 0.2),
+	));
+	Ok(entity)
+}
+
 pub fn spawn_bullet(
 	pos: Point3<f32>, rot: UnitQuaternion<f32>, vel: Vector3<f32>, parent: hecs::Entity,
 	physics: &mut Physics, world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scene = "data/gripper.glb";
-	game_state::cache_scene(state, scene)?;
+	let scene_name = "data/gripper.glb";
+	game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
-		comps::Scene {
-			scene: scene.to_string(),
-		},
+		comps::Scene::new(scene_name),
 		comps::OnCollideEfffects::new(&[
 			comps::Effect::Die,
 			comps::Effect::Damage {
 				amount: 10.,
 				owner: parent,
 			},
+			comps::Effect::SpawnHit,
 		]),
 		comps::Light {
 			color: Color::from_rgb_f(1., 1., 0.),
@@ -554,9 +564,7 @@ pub fn spawn_level(
 
 	let entity = world.spawn((
 		comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
-		comps::Scene {
-			scene: scene_name.to_string(),
-		},
+		comps::Scene::new(scene_name),
 	));
 
 	let level_scene = state.get_scene(scene_name).unwrap();
@@ -666,6 +674,9 @@ impl Map
 	{
 		let mut to_die = vec![];
 		let mut effects = vec![];
+		let mut spawn_fns: Vec<
+			Box<dyn FnOnce(&mut Map, &mut game_state::GameState) -> Result<hecs::Entity>>,
+		> = vec![];
 		std::mem::swap(&mut self.delayed_effects, &mut effects);
 
 		// Position snapshotting.
@@ -722,6 +733,11 @@ impl Map
 			self.camera_target.pos = position.pos;
 			self.camera_target.rot = position.rot;
 			self.camera_target.scale = position.scale;
+		}
+		if state.controls.get_action_state(game_state::Action::Pause) > 0.5
+		{
+			state.controls.clear_action_state(game_state::Action::Pause);
+			state.hs.paused = !state.hs.paused;
 		}
 
 		// AI.
@@ -784,6 +800,19 @@ impl Map
 			}
 		}
 
+		// ExplosionScaling.
+		for (id, (position, explosion_scaling)) in self
+			.world
+			.query::<(&mut comps::Position, &comps::ExplosionScaling)>()
+			.iter()
+		{
+			if state.hs.time() > explosion_scaling.time_to_die
+			{
+				to_die.push(id);
+			}
+			position.scale += 4. * DT;
+		}
+
 		// Friction + force resetting.
 		for (_, (_position, physics)) in self
 			.world
@@ -825,9 +854,6 @@ impl Map
 			);
 		}
 
-		let mut spawn_fns: Vec<
-			Box<dyn FnOnce(&mut Map, &mut game_state::GameState) -> Result<hecs::Entity>>,
-		> = vec![];
 		// Weapons.
 		for (id, (controller, weapon, position)) in self
 			.world
@@ -970,6 +996,7 @@ impl Map
 										id,
 										other_id,
 									));
+									effects.push((comps::Effect::SpawnHit, id, other_id));
 									self.delayed_effects.push((
 										comps::Effect::GripperPierce {
 											old_vel: 0.75 * gripper_vel,
@@ -1159,6 +1186,25 @@ impl Map
 							}
 						}
 					}
+					comps::Effect::SpawnHit =>
+					{
+						let mut src_pos = None;
+						if let Ok(position) = self.world.get::<&comps::Position>(id)
+						{
+							src_pos = Some(position.pos);
+						}
+						let mut dest_pos = None;
+						if let Ok(position) = self.world.get::<&comps::Position>(other_id)
+						{
+							dest_pos = Some(position.pos);
+						}
+						if let (Some(src_pos), Some(dest_pos)) = (src_pos, dest_pos)
+						{
+							let dir = (dest_pos - src_pos).normalize();
+							let rot = UnitQuaternion::face_towards(&dir, &Vector3::y());
+							spawn_hit(src_pos, rot, &mut self.world, state)?;
+						}
+					}
 				}
 			}
 
@@ -1311,6 +1357,15 @@ impl Map
 				.core
 				.set_shader_transform("model_matrix", &utils::mat4_to_transform(shift * scale))
 				.ok();
+			// THIS IS HORRIBLE
+			let color = scene.color;
+			let (r, g, b, a) = color.to_rgba_f();
+			let color = [r, g, b, a];
+			state
+				.hs
+				.core
+				.set_shader_uniform("base_color", &[color][..])
+				.ok();
 
 			state.get_scene(&scene.scene).unwrap().draw(
 				&state.hs.core,
@@ -1332,9 +1387,14 @@ impl Map
 				let end_pos =
 					end_pos.draw_pos(alpha) + end_pos.draw_rot(alpha) * connector.end_offset;
 
+				let dir = (end_pos - start_pos).normalize();
+				let rot = UnitQuaternion::from_axis_angle(
+					&Unit::new_unchecked(dir),
+					5. * state.hs.time() as f32,
+				);
 				let shift = Isometry3 {
 					translation: ((start_pos.coords + end_pos.coords) / 2.0).into(),
-					rotation: UnitQuaternion::face_towards(&(end_pos - start_pos), &Vector3::y()),
+					rotation: rot * UnitQuaternion::face_towards(&dir, &Vector3::y()),
 				}
 				.to_homogeneous();
 				let scale = Matrix4::new_nonuniform_scaling(&Vector3::new(
@@ -1419,6 +1479,73 @@ impl Map
 			state.final_shader.as_ref().unwrap(),
 			state.hs.buffer1.as_ref().unwrap(),
 		)?;
+
+		// TODO: NO WAY!
+		let material_mapper = |material: &scene::Material<game_state::MaterialKind>,
+		                       texture_name: &str|
+		 -> slhack::error::Result<&Bitmap> {
+			if material.desc.two_sided
+			{
+				unsafe {
+					gl::Disable(gl::CULL_FACE);
+				}
+			}
+			else
+			{
+				unsafe {
+					gl::Enable(gl::CULL_FACE);
+				}
+			}
+			state.get_bitmap(texture_name).into_slhack()
+		};
+		state
+			.hs
+			.core
+			.use_shader(Some(state.forward2_shader.as_ref().unwrap()))
+			.unwrap();
+		state
+			.hs
+			.core
+			.use_projection_transform(&utils::mat4_to_transform(project.to_homogeneous()));
+		state.hs.core.set_depth_test(Some(DepthFunction::Less));
+		state
+			.hs
+			.core
+			.set_blender(BlendOperation::Add, BlendMode::One, BlendMode::One);
+
+		// Second forward pass, for additive stuff.
+		for (_, (position, scene)) in self
+			.world
+			.query::<(&comps::Position, &comps::AdditiveScene)>()
+			.iter()
+		{
+			let shift = Isometry3 {
+				translation: position.draw_pos(alpha).coords.into(),
+				rotation: position.draw_rot(alpha),
+			}
+			.to_homogeneous();
+			let scale = Similarity3::from_scaling(position.draw_scale(alpha)).to_homogeneous();
+
+			state.hs.core.use_transform(&utils::mat4_to_transform(
+				camera.to_homogeneous() * shift * scale,
+			));
+
+			// THIS IS HORRIBLE
+			let color = scene.color;
+			let (r, g, b, a) = color.to_rgba_f();
+			let color = [r, g, b, a];
+			state
+				.hs
+				.core
+				.set_shader_uniform("base_color", &[color][..])
+				.ok();
+
+			state.get_scene(&scene.scene).unwrap().draw(
+				&state.hs.core,
+				&state.hs.prim,
+				material_mapper,
+			);
+		}
 
 		state
 			.hs

@@ -57,10 +57,32 @@ impl game_loop::LoopState for LoopState
 	{
 		let game_state = &mut self.game_state;
 		let hs = &mut game_state.hs;
-		game_state.basic_shader = Some(utils::load_shader(hs.display_mut(), "data/basic")?);
-		game_state.forward_shader = Some(utils::load_shader(hs.display_mut(), "data/forward")?);
-		game_state.light_shader = Some(utils::load_shader(hs.display_mut(), "data/light")?);
-		game_state.final_shader = Some(utils::load_shader(hs.display_mut(), "data/final")?);
+		let replacements = game_state::shader_replacements();
+		game_state.basic_shader = Some(utils::load_shader(
+			hs.display_mut(),
+			"data/basic",
+			&replacements,
+		)?);
+		game_state.forward_shader = Some(utils::load_shader(
+			hs.display_mut(),
+			"data/forward",
+			&replacements,
+		)?);
+		game_state.forward2_shader = Some(utils::load_shader(
+			hs.display_mut(),
+			"data/forward2",
+			&replacements,
+		)?);
+		game_state.light_shader = Some(utils::load_shader(
+			hs.display_mut(),
+			"data/light",
+			&replacements,
+		)?);
+		game_state.final_shader = Some(utils::load_shader(
+			hs.display_mut(),
+			"data/final",
+			&replacements,
+		)?);
 		let (width, height) = hs.fixed_buffer_size.unwrap();
 		game_state.deferred_renderer = Some(deferred::DeferredRenderer::new(
 			hs.display.as_mut().unwrap(),

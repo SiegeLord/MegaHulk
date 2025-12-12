@@ -29,13 +29,18 @@ impl Position
 {
 	pub fn new(pos: Point3<f32>, rot: Unit<Quaternion<f32>>) -> Self
 	{
+		Self::new_scaled(pos, rot, 1.0)
+	}
+
+	pub fn new_scaled(pos: Point3<f32>, rot: Unit<Quaternion<f32>>, scale: f32) -> Self
+	{
 		Self {
-			pos,
+			pos: pos,
 			old_pos: pos,
-			rot,
+			rot: rot,
 			old_rot: rot,
-			scale: 1.,
-			old_scale: 1.,
+			scale: scale,
+			old_scale: scale,
 		}
 	}
 
@@ -66,6 +71,36 @@ impl Position
 pub struct Scene
 {
 	pub scene: String,
+	pub color: Color,
+}
+
+impl Scene
+{
+	pub fn new(scene: &str) -> Self
+	{
+		Self {
+			scene: scene.to_string(),
+			color: Color::from_rgb_f(1., 1., 1.),
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct AdditiveScene
+{
+	pub scene: String,
+	pub color: Color,
+}
+
+impl AdditiveScene
+{
+	pub fn new(scene: &str) -> Self
+	{
+		Self {
+			scene: scene.to_string(),
+			color: Color::from_rgb_f(1., 1., 1.),
+		}
+	}
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -256,6 +291,7 @@ pub enum Effect
 	{
 		old_vel: Vector3<f32>,
 	},
+	SpawnHit,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +306,22 @@ impl OnCollideEfffects
 	{
 		Self {
 			effects: effects.to_owned(),
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct ExplosionScaling
+{
+	pub time_to_die: f64,
+}
+
+impl ExplosionScaling
+{
+	pub fn new(time_to_die: f64) -> Self
+	{
+		Self {
+			time_to_die: time_to_die,
 		}
 	}
 }
