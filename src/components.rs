@@ -245,6 +245,7 @@ pub struct Health
 {
 	pub health: f32,
 	pub max_health: f32,
+	pub dead: bool,
 }
 
 impl Health
@@ -254,6 +255,7 @@ impl Health
 		Self {
 			health: max_health,
 			max_health: max_health,
+			dead: false,
 		}
 	}
 }
@@ -292,15 +294,32 @@ pub enum Effect
 		old_vel: Vector3<f32>,
 	},
 	SpawnHit,
+	SpawnExplosion,
 }
 
 #[derive(Debug, Clone)]
-pub struct OnCollideEfffects
+pub struct OnCollideEffects
 {
 	pub effects: Vec<Effect>,
 }
 
-impl OnCollideEfffects
+impl OnCollideEffects
+{
+	pub fn new(effects: &[Effect]) -> Self
+	{
+		Self {
+			effects: effects.to_owned(),
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct OnDeathEffects
+{
+	pub effects: Vec<Effect>,
+}
+
+impl OnDeathEffects
 {
 	pub fn new(effects: &[Effect]) -> Self
 	{

@@ -36,7 +36,6 @@ hecs = "0.10.5"
 slr_config = "0.0.22"
 #slr_config = { path = "/home/siege/Projects/SLRConfig/slr_config" }
 nalgebra = "0.34.0"
-rand = "0.8.5"
 serde = "1.0.142"
 serde_derive = "1.0.142"
 gltf = { version="1.0.0", features = ["KHR_lights_punctual"] }
@@ -45,6 +44,8 @@ gl_loader = "0.1.2"
 memoffset = "0.9.1"
 rapier3d = "0.29.0"
 itertools = "0.14.0"
+rand_distr = "0.5.1"
+rand = "0.9.2"
 
 [profile.release]
 debug = true

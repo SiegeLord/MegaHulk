@@ -10,6 +10,7 @@ use na::{
 };
 use nalgebra as na;
 use rand::prelude::*;
+use rand_distr::Distribution;
 use rapier3d::dynamics::{
 	CCDSolver, FixedJointBuilder, ImpulseJointHandle, ImpulseJointSet, IntegrationParameters,
 	IslandManager, MassProperties, MultibodyJointSet, RigidBodyBuilder, RigidBodyHandle,
@@ -276,9 +277,10 @@ pub fn spawn_robot(
 		comps::Position::new(pos, UnitQuaternion::identity()),
 		comps::Scene::new(scene_name),
 		comps::Controller::new(),
-		comps::Health::new(55.),
+		comps::Health::new(35.),
 		comps::AI::new(),
 		comps::Weapon::new(Vector3::new(0., 0., -1.)),
+		comps::OnDeathEffects::new(&[comps::Effect::SpawnExplosion]),
 	));
 
 	let rigid_body = RigidBodyBuilder::dynamic()
@@ -490,7 +492,25 @@ pub fn spawn_hit(
 	scene.color = Color::from_rgb_f(0.5, 0.5, 0.);
 	game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
-		comps::Position::new_scaled(pos, rot, Vector3::from_element(1.)),
+		comps::Position::new_scaled(pos, rot, Vector3::from_element(0.1)),
+		scene,
+		comps::ExplosionScaling::new(state.hs.time() + 0.2),
+	));
+	Ok(entity)
+}
+
+pub fn spawn_explosion(
+	pos: Point3<f32>, world: &mut hecs::World, state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene_name = "data/explosion.glb";
+	let mut scene = comps::AdditiveScene::new(scene_name);
+	scene.color = Color::from_rgb_f(1.0, 0.5, 0.);
+	game_state::cache_scene(state, scene_name)?;
+	let dir = Vector3::from_row_slice(&rand_distr::UnitSphere.sample(&mut rand::rng()));
+	let rot = UnitQuaternion::face_towards(&dir, &Vector3::y());
+	let entity = world.spawn((
+		comps::Position::new_scaled(pos, rot, Vector3::from_element(0.5)),
 		scene,
 		comps::ExplosionScaling::new(state.hs.time() + 0.2),
 	));
@@ -507,7 +527,7 @@ pub fn spawn_bullet(
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Scene::new(scene_name),
-		comps::OnCollideEfffects::new(&[
+		comps::OnCollideEffects::new(&[
 			comps::Effect::Die,
 			comps::Effect::Damage {
 				amount: 10.,
@@ -627,7 +647,7 @@ struct Map
 	camera_target: comps::Position,
 	player: hecs::Entity,
 	level: hecs::Entity,
-	delayed_effects: Vec<(comps::Effect, hecs::Entity, hecs::Entity)>,
+	delayed_effects: Vec<(comps::Effect, hecs::Entity, Option<hecs::Entity>)>,
 }
 
 impl Map
@@ -760,7 +780,7 @@ impl Map
 				{
 					if let Ok(player_position) = self.world.get::<&comps::Position>(self.player)
 					{
-						if (player_position.pos - position.pos).norm() < 4.
+						if (player_position.pos - position.pos).norm() < 5.
 						{
 							new_state = Some(comps::AIState::Attacking(self.player))
 						}
@@ -781,11 +801,11 @@ impl Map
 						controller.want_move.z = 0.;
 						if dir.dot(&forward) > 0.99
 						{
-							if diff.norm() > 3.
+							if diff.norm() > 5.
 							{
 								controller.want_move.z = 1.;
 							}
-							else if diff.norm() < 1.
+							else if diff.norm() < 3.
 							{
 								controller.want_move.z = -1.;
 							}
@@ -911,11 +931,11 @@ impl Map
 					let other_id =
 						hecs::Entity::from_bits(other_collider.user_data as u64).unwrap();
 
-					if let Ok(on_collide_effects) = self.world.get::<&comps::OnCollideEfffects>(id)
+					if let Ok(on_collide_effects) = self.world.get::<&comps::OnCollideEffects>(id)
 					{
 						for effect in &on_collide_effects.effects
 						{
-							effects.push((effect.clone(), id, other_id));
+							effects.push((effect.clone(), id, Some(other_id)));
 						}
 					}
 
@@ -1001,15 +1021,15 @@ impl Map
 											owner: gripper.parent,
 										},
 										id,
-										other_id,
+										Some(other_id),
 									));
-									effects.push((comps::Effect::SpawnHit, id, other_id));
+									effects.push((comps::Effect::SpawnHit, id, Some(other_id)));
 									self.delayed_effects.push((
 										comps::Effect::GripperPierce {
 											old_vel: 0.75 * gripper_vel,
 										},
 										id,
-										other_id,
+										Some(other_id),
 									));
 								}
 							}
@@ -1179,7 +1199,7 @@ impl Map
 
 		while !effects.is_empty()
 		{
-			let new_effects = vec![];
+			let mut new_effects = vec![];
 			// Effects.
 			for (effect, id, other_id) in effects.drain(..)
 			{
@@ -1191,18 +1211,19 @@ impl Map
 					}
 					comps::Effect::Damage { amount, owner } =>
 					{
-						if let Ok(mut health) = self.world.get::<&mut comps::Health>(other_id)
+						if let Ok(mut health) =
+							self.world.get::<&mut comps::Health>(other_id.unwrap())
 						{
 							health.health -= amount;
 						}
-						if let Ok(mut ai) = self.world.get::<&mut comps::AI>(other_id)
+						if let Ok(mut ai) = self.world.get::<&mut comps::AI>(other_id.unwrap())
 						{
 							ai.state = comps::AIState::Attacking(owner);
 						}
 					}
 					comps::Effect::GripperPierce { old_vel } =>
 					{
-						if self.world.contains(other_id)
+						if self.world.contains(other_id.unwrap())
 						{
 							let mut attach_gripper = false;
 							if let Ok(mut gripper) = self.world.get::<&mut comps::Gripper>(id)
@@ -1237,7 +1258,7 @@ impl Map
 							src_pos = Some(position.pos);
 						}
 						let mut dest_pos = None;
-						if let Ok(position) = self.world.get::<&comps::Position>(other_id)
+						if let Ok(position) = self.world.get::<&comps::Position>(other_id.unwrap())
 						{
 							dest_pos = Some(position.pos);
 						}
@@ -1248,15 +1269,35 @@ impl Map
 							spawn_hit(src_pos, rot, &mut self.world, state)?;
 						}
 					}
+					comps::Effect::SpawnExplosion =>
+					{
+						let mut src_pos = None;
+						if let Ok(position) = self.world.get::<&comps::Position>(id)
+						{
+							src_pos = Some(position.pos);
+						}
+						if let Some(src_pos) = src_pos
+						{
+							spawn_explosion(src_pos, &mut self.world, state)?;
+						}
+					}
 				}
 			}
 
 			// Health.
 			for (id, health) in self.world.query::<&mut comps::Health>().iter()
 			{
-				if health.health <= 0.0
+				if health.health <= 0.0 && !health.dead
 				{
+					health.dead = true;
 					to_die.push(id);
+					if let Ok(on_death_effects) = self.world.get::<&comps::OnDeathEffects>(id)
+					{
+						for effect in &on_death_effects.effects
+						{
+							new_effects.push((effect.clone(), id, None));
+						}
+					}
 				}
 			}
 			effects = new_effects;
@@ -1265,7 +1306,7 @@ impl Map
 		// Remove dead entities
 		to_die.sort();
 		to_die.dedup();
-		for id in to_die
+		for id in to_die.drain(..)
 		{
 			if let Ok(physics) = self.world.get::<&comps::Physics>(id)
 			{
