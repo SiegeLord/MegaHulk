@@ -317,7 +317,7 @@ impl GameState
 	}
 }
 
-pub fn cache_scene(state: &mut GameState, name: &str) -> Result<()>
+pub fn cache_scene<'l>(state: &'l mut GameState, name: &str) -> Result<&'l Scene>
 {
 	let scene = state.cache_scene(name)?;
 	let mut textures = vec![];
@@ -342,5 +342,5 @@ pub fn cache_scene(state: &mut GameState, name: &str) -> Result<()>
 	{
 		state.cache_bitmap(&texture)?;
 	}
-	Ok(())
+	state.get_scene(name)
 }

@@ -17,8 +17,8 @@ use rapier3d::dynamics::{
 	RigidBodySet, SpringJointBuilder,
 };
 use rapier3d::geometry::{
-	Ball, ColliderBuilder, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase, Group,
-	InteractionGroups, NarrowPhase, SharedShape,
+	ColliderBuilder, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase, Group,
+	InteractionGroups, NarrowPhase, SharedShape, TriMeshFlags,
 };
 use rapier3d::pipeline::{ActiveEvents, EventHandler, PhysicsPipeline, QueryPipeline};
 use slhack::{controls, scene, sprite, ui as slhack_ui};
@@ -272,7 +272,7 @@ pub fn spawn_robot(
 ) -> Result<hecs::Entity>
 {
 	let scene_name = "data/robot1.glb";
-	game_state::cache_scene(state, scene_name)?;
+	let scene = game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
 		comps::Position::new(pos, UnitQuaternion::identity()),
 		comps::Scene::new(scene_name),
@@ -289,21 +289,23 @@ pub fn spawn_robot(
 		.linear_damping(5.)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
-	let collider = ColliderBuilder::ball(0.5)
-		.restitution(0.1)
-		.mass(1.0)
-		.friction(0.)
-		.user_data(entity.to_bits().get() as u128)
-		.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP))
-		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
-		.build();
-	let ball_body_handle = physics.rigid_body_set.insert(rigid_body);
-	physics.collider_set.insert_with_parent(
-		collider,
-		ball_body_handle,
-		&mut physics.rigid_body_set,
-	);
-	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
+	let body_handle = physics.rigid_body_set.insert(rigid_body);
+
+	for (vertices, _) in get_collision_trimeshes(scene)
+	{
+		let collider = ColliderBuilder::convex_hull(&vertices).ok_or_else(|| format!("Couldn't create convex hull for {}", scene_name))?
+			.restitution(0.1)
+			.density(1.0)
+			.friction(0.)
+			.user_data(entity.to_bits().get() as u128)
+			.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP))
+			//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
+			.build();
+		physics
+			.collider_set
+			.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
+	}
+	world.insert_one(entity, comps::Physics::new(body_handle))?;
 	Ok(entity)
 }
 
@@ -582,61 +584,93 @@ pub fn spawn_light(
 	Ok(entity)
 }
 
+fn meshes_to_trimesh(
+	meshes: &[scene::Mesh<game_state::MaterialKind>],
+) -> (Vec<Point3<f32>>, Vec<[u32; 3]>)
+{
+	let mut vertices = vec![];
+	let mut indices = vec![];
+	let mut index_offset = 0;
+	for mesh in meshes
+	{
+		for vtx in &mesh.vtxs
+		{
+			vertices.push(Point3::new(vtx.x, vtx.y, vtx.z));
+		}
+		for idxs in mesh.idxs.chunks(3)
+		{
+			indices.push([
+				idxs[0] as u32 + index_offset,
+				idxs[1] as u32 + index_offset,
+				idxs[2] as u32 + index_offset,
+			]);
+		}
+		index_offset += mesh.vtxs.len() as u32;
+	}
+	(vertices, indices)
+}
+
+fn get_collision_trimeshes(
+	scene: &scene::Scene<game_state::MaterialKind>,
+) -> Vec<(Vec<Point3<f32>>, Vec<[u32; 3]>)>
+{
+	let mut trimeshes = vec![];
+	for object in &scene.objects
+	{
+		match &object.kind
+		{
+			scene::ObjectKind::CollisionMesh { meshes } =>
+			{
+				trimeshes.push(meshes_to_trimesh(&meshes[..]));
+			}
+			_ => (),
+		}
+	}
+	if !trimeshes.is_empty()
+	{
+		return trimeshes;
+	}
+	for object in &scene.objects
+	{
+		match &object.kind
+		{
+			scene::ObjectKind::MultiMesh { meshes } =>
+			{
+				trimeshes.push(meshes_to_trimesh(&meshes[..]));
+			}
+			_ => (),
+		}
+	}
+	trimeshes
+}
+
 pub fn spawn_level(
 	scene_name: &str, state: &mut game_state::GameState, physics: &mut Physics,
 	world: &mut hecs::World,
 ) -> Result<hecs::Entity>
 {
-	game_state::cache_scene(state, scene_name)?;
+	let level_scene = game_state::cache_scene(state, scene_name)?;
 
 	let entity = world.spawn((
 		comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
 		comps::Scene::new(scene_name),
 	));
 
-	let level_scene = state.get_scene(scene_name).unwrap();
-	let mut vertices = vec![];
-	let mut indices = vec![];
-	for object in &level_scene.objects
-	{
-		match &object.kind
-		{
-			scene::ObjectKind::MultiMesh { meshes } =>
-			{
-				let mut index_offset = 0;
-				for mesh in meshes
-				{
-					for vtx in &mesh.vtxs
-					{
-						vertices.push(Point3::new(vtx.x, vtx.y, vtx.z));
-					}
-					for idxs in mesh.idxs.chunks(3)
-					{
-						indices.push([
-							idxs[0] as u32 + index_offset,
-							idxs[1] as u32 + index_offset,
-							idxs[2] as u32 + index_offset,
-						]);
-					}
-					index_offset += mesh.vtxs.len() as u32;
-				}
-			}
-			_ => (),
-		}
-	}
 	let rigid_body = RigidBodyBuilder::fixed()
 		.user_data(entity.to_bits().get() as u128)
 		.build();
-	let collider = ColliderBuilder::trimesh(vertices, indices)?
-		.user_data(entity.to_bits().get() as u128)
-		.build();
-	let rigid_body_handle = physics.rigid_body_set.insert(rigid_body);
-	physics.collider_set.insert_with_parent(
-		collider,
-		rigid_body_handle,
-		&mut physics.rigid_body_set,
-	);
-	world.insert_one(entity, comps::Physics::new(rigid_body_handle))?;
+	let body_handle = physics.rigid_body_set.insert(rigid_body);
+
+	for (vertices, indices) in get_collision_trimeshes(level_scene)
+	{
+		let collider = ColliderBuilder::trimesh(vertices, indices)?
+			.user_data(entity.to_bits().get() as u128)
+			.build();
+		physics
+			.collider_set
+			.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
+	}
+	world.insert_one(entity, comps::Physics::new(body_handle))?;
 	Ok(entity)
 }
 
