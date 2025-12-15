@@ -40,7 +40,6 @@ const PLAYER_GROUP: Group = Group::GROUP_1;
 const GRIPPER_GROUP: Group = Group::GROUP_2;
 const BIG_GROUP: Group = Group::GROUP_3;
 const SMALL_GROUP: Group = Group::GROUP_4;
-const NO_COLLISION: Group = Group::GROUP_5;
 
 pub struct PhysicsEventHandler
 {
@@ -267,14 +266,14 @@ impl Game
 }
 
 pub fn spawn_robot(
-	pos: Point3<f32>, physics: &mut Physics, world: &mut hecs::World,
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, physics: &mut Physics, world: &mut hecs::World,
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	let scene_name = "data/robot1.glb";
 	let scene = game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
-		comps::Position::new(pos, UnitQuaternion::identity()),
+		comps::Position::new(pos, rot),
 		comps::Scene::new(scene_name),
 		comps::Controller::new(),
 		comps::Health::new(35.),
@@ -285,6 +284,7 @@ pub fn spawn_robot(
 
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
+		.rotation(rot.scaled_axis())
 		.angular_damping(10.)
 		.linear_damping(5.)
 		.user_data(entity.to_bits().get() as u128)
@@ -340,7 +340,7 @@ pub fn attach_gripper_to_parent(
 	for collider_handle in gripper_body.colliders()
 	{
 		let collider = physics.collider_set.get_mut(*collider_handle).unwrap();
-		collider.set_collision_groups(InteractionGroups::new(NO_COLLISION, Group::empty()));
+		collider.set_collision_groups(InteractionGroups::none());
 	}
 	gripper_body.set_translation(desired_pos, true);
 	gripper_position.pos = Point3::origin() + desired_pos;
@@ -360,24 +360,20 @@ pub fn attach_gripper_to_parent(
 }
 
 pub fn spawn_player(
-	pos: Point3<f32>, physics: &mut Physics, world: &mut hecs::World,
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, physics: &mut Physics, world: &mut hecs::World,
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	let scene_name = "data/test.glb";
 	game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
-		comps::Position::new(pos, UnitQuaternion::identity()),
+		comps::Position::new(pos, rot),
 		comps::Controller::new(),
 		comps::Scene::new(scene_name),
-		comps::Light {
-			color: Color::from_rgb_f(1., 1., 1.),
-			intensity: 300.,
-			static_: false,
-		},
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
+		.rotation(rot.scaled_axis())
 		.angular_damping(10.)
 		.linear_damping(5.)
 		.user_data(entity.to_bits().get() as u128)
@@ -585,14 +581,43 @@ pub fn spawn_light(
 }
 
 pub fn spawn_door(
-	pos: Point3<f32>, rot: UnitQuaternion<f32>, world: &mut hecs::World,
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, physics: &mut Physics, world: &mut hecs::World,
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	let scene_name = "data/door1.glb";
-	let scene = comps::Scene::new(scene_name);
-	game_state::cache_scene(state, scene_name)?;
-	let entity = world.spawn((comps::Position::new(pos, rot), scene));
+	let scene = game_state::cache_scene(state, scene_name)?;
+
+	//scene.animation_states = animation_states;
+	let entity = world.spawn((
+		comps::Position::new(pos, rot),
+		comps::Scene::new(scene_name),
+		comps::Door::new(),
+		comps::OnCollideEffects::new(&[comps::Effect::Open]),
+	));
+
+	let rigid_body = RigidBodyBuilder::fixed()
+		.translation(pos.coords)
+		.rotation(rot.scaled_axis())
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let body_handle = physics.rigid_body_set.insert(rigid_body);
+
+	for (vertices, _) in get_collision_trimeshes(scene)
+	{
+		let collider = ColliderBuilder::convex_hull(&vertices)
+			.ok_or_else(|| format!("Couldn't create convex hull for {}", scene_name))?
+			.restitution(0.1)
+			.density(1.0)
+			.friction(0.)
+			.user_data(entity.to_bits().get() as u128)
+			.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
+			.build();
+		physics
+			.collider_set
+			.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
+	}
+	world.insert_one(entity, comps::Physics::new(body_handle))?;
 	Ok(entity)
 }
 
@@ -677,9 +702,9 @@ fn get_collision_trimeshes(
 }
 
 pub fn spawn_level(
-	scene_name: &str, state: &mut game_state::GameState, physics: &mut Physics,
-	world: &mut hecs::World,
-) -> Result<hecs::Entity>
+	scene_name: &str, physics: &mut Physics, world: &mut hecs::World,
+	state: &mut game_state::GameState,
+) -> Result<(hecs::Entity, hecs::Entity)>
 {
 	let level_scene = game_state::cache_scene(state, scene_name)?;
 
@@ -703,7 +728,79 @@ pub fn spawn_level(
 			.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
 	}
 	world.insert_one(entity, comps::Physics::new(body_handle))?;
-	Ok(entity)
+
+	let mut player_spawn_fn = None;
+	let mut spawn_fns: Vec<
+		Box<
+			dyn FnOnce(
+				&mut Physics,
+				&mut hecs::World,
+				&mut game_state::GameState,
+			) -> Result<hecs::Entity>,
+		>,
+	> = vec![];
+	for object in &level_scene.objects
+	{
+		let pos = object.pos.clone();
+		let rot = object.rot.clone();
+		match object.kind
+		{
+			scene::ObjectKind::Light { color, intensity } =>
+			{
+				spawn_light(
+					object.pos,
+					comps::Light {
+						color: color,
+						intensity: intensity / 50.,
+						static_: true,
+					},
+					world,
+				)?;
+			}
+			scene::ObjectKind::Empty =>
+			{
+				if object.name == "PlayerStart"
+				{
+					player_spawn_fn = Some(move |physics, world, state| -> Result<hecs::Entity> {
+						spawn_player(pos, rot, physics, world, state)
+					});
+				}
+				else if object.name.starts_with("Door")
+				{
+					spawn_fns.push(Box::new(
+						move |physics, world, state| -> Result<hecs::Entity> {
+							spawn_door(pos, rot, physics, world, state)
+						},
+					));
+				}
+				else if object.name.starts_with("Robot")
+				{
+					spawn_fns.push(Box::new(
+						move |physics, world, state| -> Result<hecs::Entity> {
+							spawn_robot(pos, rot, physics, world, state)
+						},
+					));
+				}
+			}
+			_ => (),
+		}
+	}
+
+	let player = if let Some(player_spawn_fn) = player_spawn_fn
+	{
+		player_spawn_fn(physics, world, state)?
+	}
+	else
+	{
+		return Err(format!("No PlayerStart in {}", scene_name))?;
+	};
+
+	for spawn_fn in spawn_fns
+	{
+		spawn_fn(physics, world, state)?;
+	}
+
+	Ok((entity, player))
 }
 
 struct Map
@@ -722,42 +819,28 @@ impl Map
 	{
 		let mut world = hecs::World::new();
 
-		// ???
-		game_state::cache_scene(state, "data/test_level.glb")?;
-		state.cache_bitmap("data/level_lightmap.png")?;
+		let level_name = "data/test_level.glb";
+		//state.cache_bitmap("data/level_lightmap.png")?;
 
 		game_state::cache_scene(state, "data/sphere.glb")?;
 		game_state::cache_scene(state, "data/test.obj")?;
 
-		let level_scene = state.get_scene("data/test_level.glb").unwrap();
-		for object in &level_scene.objects
-		{
-			if let scene::ObjectKind::Light { color, intensity } = object.kind
-			{
-				spawn_light(
-					object.pos,
-					comps::Light {
-						color: color,
-						intensity: intensity / 50.,
-						static_: true,
-					},
-					&mut world,
-				)?;
-			}
-		}
-
 		let mut physics = Physics::new();
+
+		game_state::cache_scene(state, level_name)?;
+
 		//spawn_robot(Point3::new(2.5, 0.5, 1.), &mut physics, &mut world, state)?;
 		//spawn_robot(Point3::new(2.5, 0.5, 0.), &mut physics, &mut world, state)?;
 		//spawn_robot(Point3::new(1.5, 0.5, 0.), &mut physics, &mut world, state)?;
-		spawn_door(
-			Point3::new(1.5, 0.5, 0.),
-			UnitQuaternion::identity(),
-			&mut world,
-			state,
-		)?;
-		let player = spawn_player(Point3::new(2., 0.5, 4.), &mut physics, &mut world, state)?;
-		let level = spawn_level("data/test_level.glb", state, &mut physics, &mut world)?;
+		//spawn_door(
+		//	Point3::new(1.5, 0.5, 0.),
+		//	UnitQuaternion::identity(),
+		//	&mut physics,
+		//	&mut world,
+		//	state,
+		//)?;
+		//
+		let (level, player) = spawn_level("data/test_level.glb", &mut physics, &mut world, state)?;
 
 		Ok(Self {
 			world: world,
@@ -1225,6 +1308,57 @@ impl Map
 			spawn_fn(self, state)?;
 		}
 
+		// Door upkeep.
+		for (id, (door, scene, physics)) in self
+			.world
+			.query::<(&mut comps::Door, &mut comps::Scene, &comps::Physics)>()
+			.iter()
+		{
+			if door.status == comps::DoorStatus::Open && state.hs.time > door.time_to_close
+			{
+				let real_scene = state.get_scene(&scene.scene).unwrap();
+
+				let mut animation_states = HashMap::new();
+				for (idx, obj) in real_scene.objects.iter().enumerate()
+				{
+					if obj.name.starts_with("Door")
+					{
+						let animation_state = comps::AnimationState {
+							speed: 1.0,
+							state: scene::AnimationState::new("Close", true),
+						};
+						animation_states.insert(idx as i32, animation_state);
+					}
+				}
+				scene.animation_states = animation_states;
+
+				let body = self.physics.rigid_body_set.get(physics.handle).unwrap();
+				for collider_handle in body.colliders()
+				{
+					let collider = self.physics.collider_set.get_mut(*collider_handle).unwrap();
+					collider.set_collision_groups(InteractionGroups::all());
+				}
+				door.status = comps::DoorStatus::Closed;
+			}
+			else if door.want_open
+			{
+				effects.push((comps::Effect::Open, id, None));
+			}
+		}
+
+		// Scene upkeep.
+		for (_, scene) in self.world.query::<&mut comps::Scene>().iter()
+		{
+			let the_scene = state.get_scene(&scene.scene)?;
+			for (obj_idx, animation_state) in &mut scene.animation_states
+			{
+				the_scene.objects[*obj_idx as usize].advance_state(
+					&mut animation_state.state,
+					(animation_state.speed * DT) as f64,
+				);
+			}
+		}
+
 		// Connector upkeep
 		let mut connector_ends = vec![];
 		for (id, (connector, _)) in self
@@ -1353,6 +1487,58 @@ impl Map
 						if let Some(src_pos) = src_pos
 						{
 							spawn_explosion(src_pos, &mut self.world, state)?;
+						}
+					}
+					comps::Effect::Open =>
+					{
+						let mut query = self
+							.world
+							.query_one::<(&mut comps::Door, &mut comps::Scene, &comps::Physics)>(id)
+							.unwrap();
+						if let Some((door, scene, physics)) = query.get()
+						{
+							let mut can_open = true;
+							for animation_state in scene.animation_states.values()
+							{
+								can_open = animation_state.state.get_num_loops() != 0;
+							}
+
+							if can_open
+							{
+								let real_scene = state.get_scene(&scene.scene).unwrap();
+
+								let mut animation_states = HashMap::new();
+								for (idx, obj) in real_scene.objects.iter().enumerate()
+								{
+									if obj.name.starts_with("Door")
+									{
+										let animation_state = comps::AnimationState {
+											speed: 1.0,
+											state: scene::AnimationState::new("Open", true),
+										};
+										animation_states.insert(idx as i32, animation_state);
+									}
+								}
+								scene.animation_states = animation_states;
+
+								let body = self.physics.rigid_body_set.get(physics.handle).unwrap();
+								for collider_handle in body.colliders()
+								{
+									let collider = self
+										.physics
+										.collider_set
+										.get_mut(*collider_handle)
+										.unwrap();
+									collider.set_collision_groups(InteractionGroups::none());
+								}
+								door.time_to_close = state.hs.time + 5.;
+								door.status = comps::DoorStatus::Open;
+								door.want_open = false;
+							}
+							else
+							{
+								door.want_open = true;
+							}
 						}
 					}
 				}
@@ -1530,6 +1716,7 @@ impl Map
 			state.get_scene(&scene.scene).unwrap().draw(
 				&state.hs.core,
 				&state.hs.prim,
+				|idx, _| scene.animation_states.get(&(idx as i32)).map(|s| &s.state),
 				material_mapper,
 				pos_fn,
 			);
@@ -1584,6 +1771,7 @@ impl Map
 				scene.draw(
 					&state.hs.core,
 					&state.hs.prim,
+					|_, _| None,
 					|_, s| state.get_bitmap(s).into_slhack(),
 					|_, _, _| {},
 				);
@@ -1671,6 +1859,7 @@ impl Map
 			state.get_scene(&scene.scene).unwrap().draw(
 				&state.hs.core,
 				&state.hs.prim,
+				|idx, _| scene.animation_states.get(&(idx as i32)).map(|s| &s.state),
 				material_mapper,
 				pos_fn,
 			);

@@ -3,6 +3,7 @@ use nalgebra::{Point3, Quaternion, Unit, Vector3};
 use rand::prelude::*;
 use rapier3d::dynamics::ImpulseJointHandle;
 use slhack::sprite;
+use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Light
@@ -68,10 +69,19 @@ impl Position
 }
 
 #[derive(Debug, Clone)]
+pub struct AnimationState
+{
+	pub speed: f32,
+	pub state: slhack::scene::AnimationState,
+}
+
+#[derive(Debug, Clone)]
 pub struct Scene
 {
 	pub scene: String,
 	pub color: Color,
+	// This indexes into the Scene's objects
+	pub animation_states: HashMap<i32, AnimationState>,
 }
 
 impl Scene
@@ -81,6 +91,7 @@ impl Scene
 		Self {
 			scene: scene.to_string(),
 			color: Color::from_rgb_f(1., 1., 1.),
+			animation_states: HashMap::new(),
 		}
 	}
 }
@@ -90,6 +101,8 @@ pub struct AdditiveScene
 {
 	pub scene: String,
 	pub color: Color,
+	// This indexes into the Scene's objects
+	pub animation_states: HashMap<i32, AnimationState>,
 }
 
 impl AdditiveScene
@@ -99,6 +112,7 @@ impl AdditiveScene
 		Self {
 			scene: scene.to_string(),
 			color: Color::from_rgb_f(1., 1., 1.),
+			animation_states: HashMap::new(),
 		}
 	}
 }
@@ -295,6 +309,7 @@ pub enum Effect
 	},
 	SpawnHit,
 	SpawnExplosion,
+	Open,
 }
 
 #[derive(Debug, Clone)]
@@ -341,6 +356,33 @@ impl ExplosionScaling
 	{
 		Self {
 			time_to_die: time_to_die,
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DoorStatus
+{
+	Open,
+	Closed,
+}
+
+#[derive(Debug, Clone)]
+pub struct Door
+{
+	pub status: DoorStatus,
+	pub time_to_close: f64,
+	pub want_open: bool,
+}
+
+impl Door
+{
+	pub fn new() -> Self
+	{
+		Door {
+			status: DoorStatus::Closed,
+			time_to_close: 0.,
+			want_open: false,
 		}
 	}
 }
