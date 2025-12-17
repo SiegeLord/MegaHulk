@@ -5,8 +5,8 @@ use allegro::*;
 use allegro_font::*;
 use itertools::Itertools;
 use na::{
-	Isometry3, Matrix4, Perspective3, Point2, Point3, RealField, Rotation2, Rotation3, Similarity3,
-	Transform3, Unit, UnitQuaternion, Vector2, Vector3, Vector4,
+	Isometry3, Matrix4, Perspective3, Point2, Point3, Quaternion, RealField, Rotation2, Rotation3,
+	Similarity3, Transform3, Unit, UnitQuaternion, Vector2, Vector3, Vector4,
 };
 use nalgebra as na;
 use rand::prelude::*;
@@ -154,7 +154,7 @@ impl Game
 	pub fn new(state: &mut game_state::GameState) -> Result<Self>
 	{
 		Ok(Self {
-			map: Map::new(state)?,
+			map: Map::new("data/test_level.glb", state)?,
 			subscreens: ui::SubScreens::new(state),
 		})
 	}
@@ -305,6 +305,86 @@ pub fn spawn_robot(
 			.collider_set
 			.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
 	}
+	world.insert_one(entity, comps::Physics::new(body_handle))?;
+	Ok(entity)
+}
+
+pub fn spawn_player_exit_track(
+	scene_name: &str, obj_name: &str, target: hecs::Entity, world: &mut hecs::World,
+	state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene = state.get_scene(scene_name)?;
+	let obj_idx = scene
+		.objects
+		.iter()
+		.position(|obj| obj.name.starts_with(obj_name));
+
+	let obj_idx =
+		obj_idx.ok_or_else(|| format!("Could not find {} in {}", obj_name, scene_name))?;
+
+	let entity = world.spawn((
+		comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
+		comps::SceneObjectPosition::new(
+			scene_name,
+			obj_idx as i32,
+			scene::AnimationState::new("Play", true),
+		),
+		comps::PositionCopier { target },
+		comps::ExplosionSpawner::new(),
+	));
+	Ok(entity)
+}
+
+pub fn spawn_animated_target(
+	scene_name: &str, obj_name: &str, world: &mut hecs::World, state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene = state.get_scene(scene_name)?;
+	let obj_idx = scene
+		.objects
+		.iter()
+		.position(|obj| obj.name.starts_with(obj_name));
+
+	let obj_idx =
+		obj_idx.ok_or_else(|| format!("Could not find {} in {}", obj_name, scene_name))?;
+
+	let entity = world.spawn((
+		comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
+		comps::SceneObjectPosition::new(
+			scene_name,
+			obj_idx as i32,
+			scene::AnimationState::new("Play", true),
+		),
+	));
+	Ok(entity)
+}
+
+pub fn spawn_exit_trigger(
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, physics: &mut Physics, world: &mut hecs::World,
+) -> Result<hecs::Entity>
+{
+	let entity = world.spawn((
+		comps::Position::new(pos, rot),
+		comps::OnCollideEffects::new(&[comps::Effect::StartExitAnimation]),
+	));
+
+	let rigid_body = RigidBodyBuilder::fixed()
+		.translation(pos.coords)
+		.rotation(rot.scaled_axis())
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let body_handle = physics.rigid_body_set.insert(rigid_body);
+
+	let collider = ColliderBuilder::ball(1.)
+		.sensor(true)
+		.user_data(entity.to_bits().get() as u128)
+		.collision_groups(InteractionGroups::new(PLAYER_GROUP, PLAYER_GROUP))
+		.active_events(ActiveEvents::COLLISION_EVENTS)
+		.build();
+	physics
+		.collider_set
+		.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
 	world.insert_one(entity, comps::Physics::new(body_handle))?;
 	Ok(entity)
 }
@@ -511,6 +591,11 @@ pub fn spawn_explosion(
 		comps::Position::new_scaled(pos, rot, Vector3::from_element(0.5)),
 		scene,
 		comps::ExplosionScaling::new(state.hs.time() + 0.2),
+		comps::Light {
+			color: Color::from_rgb_f(1., 0.5, 0.),
+			intensity: 500.,
+			static_: false,
+		},
 	));
 	Ok(entity)
 }
@@ -781,6 +866,14 @@ pub fn spawn_level(
 						},
 					));
 				}
+				else if object.name.starts_with("ExitTrigger")
+				{
+					spawn_fns.push(Box::new(
+						move |physics, world, _state| -> Result<hecs::Entity> {
+							spawn_exit_trigger(pos, rot, physics, world)
+						},
+					));
+				}
 			}
 			_ => (),
 		}
@@ -808,6 +901,8 @@ struct Map
 	world: hecs::World,
 	physics: Physics,
 	camera_target: comps::Position,
+	level_name: String,
+	camera: hecs::Entity,
 	player: hecs::Entity,
 	level: hecs::Entity,
 	delayed_effects: Vec<(comps::Effect, hecs::Entity, Option<hecs::Entity>)>,
@@ -815,38 +910,23 @@ struct Map
 
 impl Map
 {
-	fn new(state: &mut game_state::GameState) -> Result<Self>
+	fn new(level_name: &str, state: &mut game_state::GameState) -> Result<Self>
 	{
 		let mut world = hecs::World::new();
-
-		let level_name = "data/test_level.glb";
-		//state.cache_bitmap("data/level_lightmap.png")?;
 
 		game_state::cache_scene(state, "data/sphere.glb")?;
 		game_state::cache_scene(state, "data/test.obj")?;
 
 		let mut physics = Physics::new();
-
-		game_state::cache_scene(state, level_name)?;
-
-		//spawn_robot(Point3::new(2.5, 0.5, 1.), &mut physics, &mut world, state)?;
-		//spawn_robot(Point3::new(2.5, 0.5, 0.), &mut physics, &mut world, state)?;
-		//spawn_robot(Point3::new(1.5, 0.5, 0.), &mut physics, &mut world, state)?;
-		//spawn_door(
-		//	Point3::new(1.5, 0.5, 0.),
-		//	UnitQuaternion::identity(),
-		//	&mut physics,
-		//	&mut world,
-		//	state,
-		//)?;
-		//
-		let (level, player) = spawn_level("data/test_level.glb", &mut physics, &mut world, state)?;
+		let (level, player) = spawn_level(level_name, &mut physics, &mut world, state)?;
 
 		Ok(Self {
 			world: world,
 			physics: physics,
 			camera_target: comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
 			player: player,
+			camera: player,
+			level_name: level_name.to_string(),
 			level: level,
 			delayed_effects: vec![],
 		})
@@ -910,9 +990,11 @@ impl Map
 				.enumerate()
 			{
 				controller.want_gripper[idx] = state.controls.get_action_state(*action) > 0.5;
-				state.controls.clear_action_state(*action); // TODO: Rework
+				state.controls.clear_action_state(*action);
 			}
-
+		}
+		if let Ok(position) = self.world.get::<&comps::Position>(self.camera)
+		{
 			self.camera_target.pos = position.pos;
 			self.camera_target.rot = position.rot;
 			self.camera_target.scale = position.scale;
@@ -1302,12 +1384,6 @@ impl Map
 			physics.old_vel = *body.linvel();
 		}
 
-		// Spawn fns;
-		for spawn_fn in spawn_fns
-		{
-			spawn_fn(self, state)?;
-		}
-
 		// Door upkeep.
 		for (id, (door, scene, physics)) in self
 			.world
@@ -1378,7 +1454,6 @@ impl Map
 				to_die.push(id);
 			}
 		}
-
 		// Is this valid?
 		for ((_, (connector, position)), (start_position, end_position)) in itertools::izip!(
 			self.world
@@ -1405,6 +1480,71 @@ impl Map
 			position.snapshot();
 		}
 
+		// SceneObjectPosition.
+		for (_, (scene_object_position, position)) in self
+			.world
+			.query::<(&mut comps::SceneObjectPosition, &mut comps::Position)>()
+			.iter()
+		{
+			let scene = state.get_scene(&scene_object_position.scene_name)?;
+			let object = &scene.objects[scene_object_position.object_idx as usize];
+
+			object.advance_state(&mut scene_object_position.animation_state, DT as f64);
+			let (pos, rot, scale) =
+				object.get_animation_position(&scene_object_position.animation_state);
+
+			//let fixed_rot = Unit::from_quaternion(Quaternion::new(rot.i, -rot.k, rot.j, rot.w));
+			let fixed_rot = rot * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -PI / 2.);
+
+			position.pos = pos;
+			position.rot = fixed_rot;
+			position.scale = scale;
+		}
+
+		// PositionCopier
+		for (_, (position_copier, position)) in self
+			.world
+			.query::<(&comps::PositionCopier, &comps::Position)>()
+			.iter()
+		{
+			if let Ok(physics) = self.world.get::<&comps::Physics>(position_copier.target)
+			{
+				let body = self.physics.rigid_body_set.get_mut(physics.handle).unwrap();
+				body.set_position(position.pos.into(), true);
+				body.set_rotation(position.rot, true);
+			}
+		}
+
+		// Explosion spawner
+		for (_, (explosion_spawner, position)) in self
+			.world
+			.query::<(&mut comps::ExplosionSpawner, &comps::Position)>()
+			.iter()
+		{
+			if state.hs.time > explosion_spawner.time_for_explosion
+			{
+				let mut rng = rand::rng();
+				let (forward, _, _) = get_dirs(position.rot);
+				let pos = position.pos
+					+ -5. * forward + Vector3::new(
+					rng.random_range(-1.0..=1.0),
+					rng.random_range(-1.0..=1.0),
+					rng.random_range(-1.0..=1.0),
+				);
+				spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
+					spawn_explosion(pos, &mut map.world, state)
+				}));
+				explosion_spawner.time_for_explosion = state.hs.time + 0.1;
+			}
+		}
+
+		// Spawn fns;
+		for spawn_fn in spawn_fns
+		{
+			spawn_fn(self, state)?;
+		}
+
+		// Effects.
 		while !effects.is_empty()
 		{
 			let mut new_effects = vec![];
@@ -1540,6 +1680,22 @@ impl Map
 								door.want_open = true;
 							}
 						}
+					}
+					comps::Effect::StartExitAnimation =>
+					{
+						spawn_player_exit_track(
+							&self.level_name,
+							"ExitTrack",
+							self.player,
+							&mut self.world,
+							state,
+						)?;
+						self.camera = spawn_animated_target(
+							&self.level_name,
+							"ExitCamera",
+							&mut self.world,
+							state,
+						)?;
 					}
 				}
 			}

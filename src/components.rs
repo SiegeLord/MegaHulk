@@ -310,6 +310,7 @@ pub enum Effect
 	SpawnHit,
 	SpawnExplosion,
 	Open,
+	StartExitAnimation,
 }
 
 #[derive(Debug, Clone)]
@@ -383,6 +384,50 @@ impl Door
 			status: DoorStatus::Closed,
 			time_to_close: 0.,
 			want_open: false,
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct SceneObjectPosition
+{
+	pub scene_name: String,
+	pub object_idx: i32,
+	pub animation_state: slhack::scene::AnimationState,
+}
+
+impl SceneObjectPosition
+{
+	pub fn new(
+		scene_name: &str, object_idx: i32, animation_state: slhack::scene::AnimationState,
+	) -> Self
+	{
+		Self {
+			scene_name: scene_name.to_string(),
+			object_idx: object_idx,
+			animation_state: animation_state,
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct PositionCopier
+{
+	pub target: hecs::Entity,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExplosionSpawner
+{
+	pub time_for_explosion: f64,
+}
+
+impl ExplosionSpawner
+{
+	pub fn new() -> Self
+	{
+		Self {
+			time_for_explosion: 0.,
 		}
 	}
 }
