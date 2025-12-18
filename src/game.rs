@@ -272,6 +272,7 @@ pub fn spawn_robot(
 {
 	let scene_name = "data/robot1.glb";
 	let scene = game_state::cache_scene(state, scene_name)?;
+
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Scene::new(scene_name),
@@ -287,6 +288,52 @@ pub fn spawn_robot(
 		.rotation(rot.scaled_axis())
 		.angular_damping(10.)
 		.linear_damping(5.)
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let body_handle = physics.rigid_body_set.insert(rigid_body);
+
+	for (vertices, _) in get_collision_trimeshes(scene)
+	{
+		let collider = ColliderBuilder::convex_hull(&vertices).ok_or_else(|| format!("Couldn't create convex hull for {}", scene_name))?
+			.restitution(0.1)
+			.density(1.0)
+			.friction(0.)
+			.user_data(entity.to_bits().get() as u128)
+			.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP))
+			//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
+			.build();
+		physics
+			.collider_set
+			.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
+	}
+	world.insert_one(entity, comps::Physics::new(body_handle))?;
+	Ok(entity)
+}
+
+pub fn spawn_reactor(
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, physics: &mut Physics, world: &mut hecs::World,
+	state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene_name = "data/robot1.glb";
+	let scene = game_state::cache_scene(state, scene_name)?;
+
+	let mut health = comps::Health::new(35.);
+	health.remove_on_death = false;
+
+	let entity = world.spawn((
+		comps::Position::new(pos, rot),
+		comps::Scene::new(scene_name),
+		health,
+		comps::OnDeathEffects::new(&[
+			comps::Effect::SpawnExplosionSpawner,
+			comps::Effect::OpenExit,
+		]),
+	));
+
+	let rigid_body = RigidBodyBuilder::fixed()
+		.translation(pos.coords)
+		.rotation(rot.scaled_axis())
 		.user_data(entity.to_bits().get() as u128)
 		.build();
 	let body_handle = physics.rigid_body_set.insert(rigid_body);
@@ -331,6 +378,15 @@ pub fn spawn_player_exit_track(
 			scene::AnimationState::new("Play", true),
 		),
 		comps::PositionCopier { target },
+	));
+	Ok(entity)
+}
+
+pub fn spawn_explosion_spawner(pos: Point3<f32>, world: &mut hecs::World) -> Result<hecs::Entity>
+{
+	let entity = world.spawn((
+		comps::Position::new(pos, UnitQuaternion::identity()),
+		comps::ExplosionSpawner::new(),
 	));
 	Ok(entity)
 }
@@ -607,6 +663,11 @@ pub fn spawn_hit(
 	let entity = world.spawn((
 		comps::Position::new_scaled(pos, rot, Vector3::from_element(0.1)),
 		scene,
+		comps::Light {
+			color: Color::from_rgb_f(0.5, 0.5, 0.),
+			intensity: 500.,
+			static_: false,
+		},
 		comps::ExplosionScaling::new(state.hs.time() + 0.2),
 	));
 	Ok(entity)
@@ -701,8 +762,8 @@ pub fn spawn_light(
 }
 
 pub fn spawn_door(
-	pos: Point3<f32>, rot: UnitQuaternion<f32>, physics: &mut Physics, world: &mut hecs::World,
-	state: &mut game_state::GameState,
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, open_on_exit: bool, physics: &mut Physics,
+	world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	let scene_name = "data/door1.glb";
@@ -712,7 +773,7 @@ pub fn spawn_door(
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Scene::new(scene_name),
-		comps::Door::new(),
+		comps::Door::new(open_on_exit),
 		comps::OnCollideEffects::new(&[comps::Effect::Open]),
 	));
 
@@ -887,9 +948,15 @@ pub fn spawn_level(
 				}
 				else if object.name.starts_with("Door")
 				{
+					let open_on_exit = object
+						.properties
+						.as_object()
+						.and_then(|o| o.get("open_on_exit"))
+						.and_then(|b| b.as_bool())
+						.unwrap_or(false);
 					spawn_fns.push(Box::new(
 						move |physics, world, state| -> Result<hecs::Entity> {
-							spawn_door(pos, rot, physics, world, state)
+							spawn_door(pos, rot, open_on_exit, physics, world, state)
 						},
 					));
 				}
@@ -898,6 +965,14 @@ pub fn spawn_level(
 					spawn_fns.push(Box::new(
 						move |physics, world, state| -> Result<hecs::Entity> {
 							spawn_robot(pos, rot, physics, world, state)
+						},
+					));
+				}
+				else if object.name.starts_with("Reactor")
+				{
+					spawn_fns.push(Box::new(
+						move |physics, world, state| -> Result<hecs::Entity> {
+							spawn_reactor(pos, rot, physics, world, state)
 						},
 					));
 				}
@@ -1450,7 +1525,9 @@ impl Map
 			.query::<(&mut comps::Door, &mut comps::Scene, &comps::Physics)>()
 			.iter()
 		{
-			if door.status == comps::DoorStatus::Open && state.hs.time > door.time_to_close
+			if door.status == comps::DoorStatus::Open
+				&& state.hs.time > door.time_to_close
+				&& !door.open_on_exit
 			{
 				let real_scene = state.get_scene(&scene.scene).unwrap();
 
@@ -1681,6 +1758,11 @@ impl Map
 							.unwrap();
 						if let Some((door, scene, physics)) = query.get()
 						{
+							if door.open_on_exit && other_id.is_some()
+							{
+								// Don't open on touch.
+								continue;
+							}
 							let mut can_open = true;
 							for animation_state in scene.animation_states.values()
 							{
@@ -1753,6 +1835,28 @@ impl Map
 						}
 						self.accept_input = false;
 					}
+					comps::Effect::OpenExit =>
+					{
+						for (id, door) in self.world.query::<&comps::Door>().iter()
+						{
+							if door.open_on_exit
+							{
+								new_effects.push((comps::Effect::Open, id, None));
+							}
+						}
+					}
+					comps::Effect::SpawnExplosionSpawner =>
+					{
+						let mut src_pos = None;
+						if let Ok(position) = self.world.get::<&comps::Position>(id)
+						{
+							src_pos = Some(position.pos);
+						}
+						if let Some(src_pos) = src_pos
+						{
+							spawn_explosion_spawner(src_pos, &mut self.world)?;
+						}
+					}
 				}
 			}
 
@@ -1762,7 +1866,10 @@ impl Map
 				if health.health <= 0.0 && !health.dead
 				{
 					health.dead = true;
-					to_die.push(id);
+					if health.remove_on_death
+					{
+						to_die.push(id);
+					}
 					if let Ok(on_death_effects) = self.world.get::<&comps::OnDeathEffects>(id)
 					{
 						for effect in &on_death_effects.effects

@@ -262,6 +262,7 @@ pub struct Health
 	pub health: f32,
 	pub max_health: f32,
 	pub dead: bool,
+	pub remove_on_death: bool,
 }
 
 impl Health
@@ -272,6 +273,7 @@ impl Health
 			health: max_health,
 			max_health: max_health,
 			dead: false,
+			remove_on_death: true,
 		}
 	}
 }
@@ -313,6 +315,8 @@ pub enum Effect
 	SpawnExplosion,
 	Open,
 	StartExitAnimation,
+	OpenExit,
+	SpawnExplosionSpawner,
 }
 
 #[derive(Debug, Clone)]
@@ -373,6 +377,7 @@ pub enum DoorStatus
 #[derive(Debug, Clone)]
 pub struct Door
 {
+	pub open_on_exit: bool,
 	pub status: DoorStatus,
 	pub time_to_close: f64,
 	pub want_open: bool,
@@ -380,9 +385,10 @@ pub struct Door
 
 impl Door
 {
-	pub fn new() -> Self
+	pub fn new(open_on_exit: bool) -> Self
 	{
 		Door {
+			open_on_exit: open_on_exit,
 			status: DoorStatus::Closed,
 			time_to_close: 0.,
 			want_open: false,
