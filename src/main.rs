@@ -24,9 +24,10 @@ pub enum Screen
 
 pub struct LoopState
 {
-	game_state: game_state::GameState,
 	next_screen: Option<game_state::NextScreen>,
 	cur_screen: Option<Screen>,
+	// Must be last!
+	game_state: game_state::GameState,
 }
 
 impl LoopState

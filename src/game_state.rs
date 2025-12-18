@@ -24,7 +24,8 @@ pub enum MaterialKind
 	Dynamic = 1,
 	Fullbright = 2,
 	DynamicWithLightmap = 3,
-	NumMaterials = 4,
+	LevelMap = 4,
+	NumMaterials = 5,
 }
 
 pub fn shader_replacements() -> Vec<(&'static str, &'static str)>
@@ -39,6 +40,7 @@ pub fn shader_replacements() -> Vec<(&'static str, &'static str)>
 			MaterialKind::Dynamic => ("DYNAMIC_MATERIAL", "1"),
 			MaterialKind::Fullbright => ("FULLBRIGHT_MATERIAL", "2"),
 			MaterialKind::DynamicWithLightmap => ("DYNAMIC_WITH_LIGHTMAP_MATERIAL", "3"),
+			MaterialKind::LevelMap => ("LEVEL_MAP_MATERIAL", "4"),
 			MaterialKind::NumMaterials => unreachable!(),
 		});
 	}
@@ -67,6 +69,9 @@ pub enum Action
 	GripLeft,
 	GripRight,
 	Pause,
+	Map,
+	ZoomIn,
+	ZoomOut,
 }
 
 impl controls::Action for Action
@@ -86,6 +91,9 @@ impl controls::Action for Action
 			Action::GripLeft => "Grip Left",
 			Action::GripRight => "Grip Right",
 			Action::Pause => "Pause",
+			Action::Map => "Map",
+			Action::ZoomIn => "Zoom In",
+			Action::ZoomOut => "Zoom Out",
 		}
 	}
 }
@@ -130,6 +138,13 @@ pub fn new_game_controls() -> controls::Controls<Action>
 		Action::Pause,
 		[Some(controls::Input::Keyboard(allegro::KeyCode::P)), None],
 	);
+	action_to_inputs.insert(
+		Action::Map,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::Tab)), None],
+	);
+
+	action_to_inputs.insert(Action::ZoomIn, [Some(controls::Input::MouseZPos), None]);
+	action_to_inputs.insert(Action::ZoomOut, [Some(controls::Input::MouseZNeg), None]);
 
 	controls::Controls::new(action_to_inputs)
 }
@@ -314,6 +329,18 @@ impl GameState
 			.scenes
 			.get(name)
 			.ok_or_else(|| format!("{name} is not cached!"))?)
+	}
+
+	pub fn with_scene<T>(
+		&mut self, name: &str,
+		scene_fn: impl FnOnce(&mut Display, &mut PrimitivesAddon, &Scene) -> Result<T>,
+	) -> Result<T>
+	{
+		let scene = self
+			.scenes
+			.get(name)
+			.ok_or_else(|| format!("{name} is not cached!"))?;
+		scene_fn(self.hs.display.as_mut().unwrap(), &mut self.hs.prim, scene)
 	}
 }
 

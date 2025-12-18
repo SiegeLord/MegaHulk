@@ -530,6 +530,7 @@ pub fn spawn_player(
 		comps::Position::new(pos, rot),
 		comps::Controller::new(),
 		comps::Scene::new(scene_name),
+		comps::MapScene::new(scene_name),
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -882,13 +883,44 @@ fn get_collision_trimeshes(
 	trimeshes
 }
 
-pub fn spawn_level(
+struct LevelMap
+{
+	object: slhack::scene::Object<game_state::MaterialKind>,
+}
+
+fn spawn_level(
 	scene_name: &str, physics: &mut Physics, world: &mut hecs::World,
 	state: &mut game_state::GameState,
-) -> Result<(hecs::Entity, hecs::Entity)>
+) -> Result<(hecs::Entity, LevelMap, hecs::Entity)>
 {
-	let level_scene = game_state::cache_scene(state, scene_name)?;
+	game_state::cache_scene(state, scene_name)?;
 
+	let level_map = state.with_scene(scene_name, |display, prim, level_scene| {
+		let obj_idx = level_scene.objects.iter().position(|o| o.name == "Level");
+		let obj_idx =
+			obj_idx.ok_or_else(|| format!("Level {} has no Level object.", scene_name))?;
+		let mut map_object = level_scene.objects[obj_idx].create_clone(display, prim, false)?;
+
+		if let slhack::scene::ObjectKind::MultiMesh { meshes } = &mut map_object.kind
+		{
+			for mesh in meshes
+			{
+				let desc = &mut mesh.material.as_mut().unwrap().desc;
+				desc.material_kind = game_state::MaterialKind::LevelMap;
+				desc.texture = "data/map_texture.png".to_string();
+				let len = mesh.vertex_buffer.len();
+				for vtx in &mut mesh.vtxs
+				{
+					vtx.color = Color::from_rgba_f(0., 0., 0., 0.);
+				}
+				let mut lock = mesh.vertex_buffer.lock_write_only(0, len).unwrap();
+				lock.copy_from_slice(&mesh.vtxs);
+			}
+		}
+		Ok(LevelMap { object: map_object })
+	})?;
+
+	let level_scene = state.get_scene(scene_name)?;
 	let entity = world.spawn((
 		comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
 		comps::Scene::new(scene_name),
@@ -1003,7 +1035,7 @@ pub fn spawn_level(
 		spawn_fn(physics, world, state)?;
 	}
 
-	Ok((entity, player))
+	Ok((entity, level_map, player))
 }
 
 fn set_connector_position(
@@ -1038,6 +1070,10 @@ struct Map
 	accept_input: bool,
 	level: hecs::Entity,
 	delayed_effects: Vec<(comps::Effect, hecs::Entity, Option<hecs::Entity>)>,
+	show_map: bool,
+	map_rot: UnitQuaternion<f32>,
+	map_zoom: f32,
+	level_map: LevelMap,
 }
 
 impl Map
@@ -1048,9 +1084,15 @@ impl Map
 
 		game_state::cache_scene(state, "data/sphere.glb")?;
 		game_state::cache_scene(state, "data/test.obj")?;
+		state.cache_bitmap("data/map_texture.png")?;
 
 		let mut physics = Physics::new();
-		let (level, player) = spawn_level(level_name, &mut physics, &mut world, state)?;
+		let (level, level_map, player) = spawn_level(level_name, &mut physics, &mut world, state)?;
+
+		let map_rot = {
+			let position = world.get::<&comps::Position>(player)?;
+			UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -PI / 2.) * position.rot
+		};
 
 		Ok(Self {
 			world: world,
@@ -1062,6 +1104,10 @@ impl Map
 			level_name: level_name.to_string(),
 			level: level,
 			delayed_effects: vec![],
+			show_map: false,
+			map_rot: map_rot,
+			map_zoom: 40.,
+			level_map: level_map,
 		})
 	}
 
@@ -1083,39 +1129,48 @@ impl Map
 		self.camera_target.snapshot();
 
 		// Player.
+		let right_left = state
+			.controls
+			.get_action_state(game_state::Action::MoveRight)
+			- state
+				.controls
+				.get_action_state(game_state::Action::MoveLeft);
+		let up_down = state.controls.get_action_state(game_state::Action::MoveUp)
+			- state
+				.controls
+				.get_action_state(game_state::Action::MoveDown);
+		let in_out = state.controls.get_action_state(game_state::Action::ZoomIn)
+			- state.controls.get_action_state(game_state::Action::ZoomOut);
+
+		let rot_right_left = state
+			.controls
+			.get_action_state(game_state::Action::RotateRight)
+			- state
+				.controls
+				.get_action_state(game_state::Action::RotateLeft);
+		let rot_up_down = state
+			.controls
+			.get_action_state(game_state::Action::RotateUp)
+			- state
+				.controls
+				.get_action_state(game_state::Action::RotateDown);
 		if self.world.contains(self.player)
 		{
-			let mut controller = self
-				.world
-				.get::<&mut comps::Controller>(self.player)
-				.unwrap();
-
-			let right_left = state
-				.controls
-				.get_action_state(game_state::Action::MoveRight)
-				- state
-					.controls
-					.get_action_state(game_state::Action::MoveLeft);
-			let up_down = state.controls.get_action_state(game_state::Action::MoveUp)
-				- state
-					.controls
-					.get_action_state(game_state::Action::MoveDown);
-
-			let rot_right_left = state
-				.controls
-				.get_action_state(game_state::Action::RotateRight)
-				- state
-					.controls
-					.get_action_state(game_state::Action::RotateLeft);
-			let rot_up_down = state
-				.controls
-				.get_action_state(game_state::Action::RotateUp)
-				- state
-					.controls
-					.get_action_state(game_state::Action::RotateDown);
-
-			if self.accept_input
+			if self.show_map
 			{
+				let y_rot =
+					UnitQuaternion::from_axis_angle(&Vector3::y_axis(), DT * rot_right_left);
+				let x_rot = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), DT * rot_up_down);
+
+				self.map_rot = y_rot * self.map_rot * x_rot;
+				self.map_zoom *= (0.9_f32).powf(in_out);
+			}
+			else if self.accept_input
+			{
+				let mut controller = self
+					.world
+					.get::<&mut comps::Controller>(self.player)
+					.unwrap();
 				controller.want_move = Vector3::new(right_left, up_down, 0.);
 				controller.want_rotate = Vector3::new(-rot_up_down, -rot_right_left, 0.);
 
@@ -1125,6 +1180,39 @@ impl Map
 				{
 					controller.want_gripper[idx] = state.controls.get_action_state(*action) > 0.5;
 					state.controls.clear_action_state(*action);
+				}
+			}
+
+			let position = self.world.get::<&comps::Position>(self.player)?;
+			//self.physics.
+			let (pos, rot, scale) = (
+				self.level_map.object.pos,
+				self.level_map.object.rot,
+				self.level_map.object.scale,
+			);
+			let shift = Isometry3 {
+				translation: pos.coords.into(),
+				rotation: rot.into(),
+			}
+			.to_homogeneous();
+			let scale = Matrix4::new_nonuniform_scaling(&scale);
+			let transform = Transform3::from_matrix_unchecked(shift * scale);
+
+			if let slhack::scene::ObjectKind::MultiMesh { meshes } = &mut self.level_map.object.kind
+			{
+				for mesh in meshes
+				{
+					let len = mesh.vertex_buffer.len();
+					for vtx in &mut mesh.vtxs
+					{
+						let vtx_pos = transform * Vector3::new(vtx.x, vtx.y, vtx.z);
+						if (vtx_pos - position.pos.coords).norm() < 4.
+						{
+							vtx.color = Color::from_rgb_f(1., 1., 1.);
+						}
+					}
+					let mut lock = mesh.vertex_buffer.lock_write_only(0, len).unwrap();
+					lock.copy_from_slice(&mesh.vtxs);
 				}
 			}
 		}
@@ -1138,6 +1226,11 @@ impl Map
 		{
 			state.controls.clear_action_state(game_state::Action::Pause);
 			state.hs.paused = !state.hs.paused;
+		}
+		if state.controls.get_action_state(game_state::Action::Map) > 0.5
+		{
+			state.controls.clear_action_state(game_state::Action::Map);
+			self.show_map = !self.show_map;
 		}
 
 		// AI.
@@ -1915,7 +2008,7 @@ impl Map
 	{
 		let dw = state.hs.buffer_width();
 		let dh = state.hs.buffer_height();
-		Perspective3::new(dw / dh, PI / 3., 0.1, 25.)
+		Perspective3::new(dw / dh, PI / 3., 0.1, 100.)
 	}
 
 	fn camera_pos(&self, alpha: f32) -> Point3<f32>
@@ -1934,11 +2027,30 @@ impl Map
 		.inverse()
 	}
 
+	fn make_map_camera(&self, alpha: f32) -> Isometry3<f32>
+	{
+		let (forward, _, _) = get_dirs(self.map_rot);
+		Isometry3 {
+			rotation: self.map_rot,
+			translation: (self.camera_target.draw_pos(alpha).coords - self.map_zoom * forward)
+				.into(),
+		}
+		.inverse()
+	}
+
 	fn draw(&mut self, state: &mut game_state::GameState) -> Result<()>
 	{
 		let alpha = state.hs.alpha;
 		let project = self.make_project(state);
-		let camera = self.make_camera(alpha);
+
+		let camera = if self.show_map
+		{
+			self.make_map_camera(alpha)
+		}
+		else
+		{
+			self.make_camera(alpha)
+		};
 
 		// Forward pass.
 		state
@@ -1961,8 +2073,12 @@ impl Map
 			.unwrap();
 
 		let material_mapper = |material: &scene::Material<game_state::MaterialKind>,
-		                       texture_name: &str|
+		                       mut texture_name: &str|
 		 -> slhack::error::Result<&Bitmap> {
+			if self.show_map
+			{
+				texture_name = "data/map_texture.png"
+			}
 			if material.desc.two_sided
 			{
 				unsafe {
@@ -1990,20 +2106,72 @@ impl Map
 			state.get_bitmap(texture_name).into_slhack()
 		};
 
-		for (_, (position, scene)) in self
-			.world
-			.query::<(&comps::Position, &comps::Scene)>()
-			.iter()
+		if self.show_map
 		{
-			let shift = Isometry3 {
-				translation: position.draw_pos(alpha).coords.into(),
-				rotation: position.draw_rot(alpha),
-			}
-			.to_homogeneous();
-			let scale = Matrix4::new_nonuniform_scaling(&position.draw_scale(alpha));
-
 			let pos_fn =
 				|obj_pos: Point3<f32>, obj_rot: UnitQuaternion<f32>, obj_scale: Vector3<f32>| {
+					let obj_shift = Isometry3 {
+						translation: obj_pos.coords.into(),
+						rotation: obj_rot.into(),
+					}
+					.to_homogeneous();
+					let obj_scale = Matrix4::new_nonuniform_scaling(&obj_scale);
+
+					state.hs.core.use_transform(&utils::mat4_to_transform(
+						camera.to_homogeneous() * obj_shift * obj_scale,
+					));
+					state
+						.hs
+						.core
+						.set_shader_transform(
+							"model_matrix",
+							&utils::mat4_to_transform(obj_shift * obj_scale),
+						)
+						.ok();
+				};
+			// THIS IS HORRIBLE
+			state
+				.hs
+				.core
+				.set_shader_uniform("base_color", &[[1.; 4]][..])
+				.ok();
+			state
+				.hs
+				.core
+				.set_shader_uniform("time", &[state.hs.time as f32][..])
+				.ok();
+			let player_pos = [
+				self.camera_target.pos.x,
+				self.camera_target.pos.y,
+				self.camera_target.pos.z,
+			];
+			state
+				.hs
+				.core
+				.set_shader_uniform("player_pos", &[player_pos][..])
+				.ok();
+
+			self.level_map.object.draw(
+				&state.hs.core,
+				&state.hs.prim,
+				None,
+				material_mapper,
+				pos_fn,
+			);
+
+			let mut query = self.world.query::<(&comps::Position, &comps::MapScene)>();
+			for (_, (position, scene)) in query.iter()
+			{
+				let shift = Isometry3 {
+					translation: position.draw_pos(alpha).coords.into(),
+					rotation: position.draw_rot(alpha),
+				}
+				.to_homogeneous();
+				let scale = Matrix4::new_nonuniform_scaling(&position.draw_scale(alpha));
+
+				let pos_fn = |obj_pos: Point3<f32>,
+				              obj_rot: UnitQuaternion<f32>,
+				              obj_scale: Vector3<f32>| {
 					let obj_shift = Isometry3 {
 						translation: obj_pos.coords.into(),
 						rotation: obj_rot.into(),
@@ -2023,23 +2191,79 @@ impl Map
 						)
 						.ok();
 				};
-			// THIS IS HORRIBLE
-			let color = scene.color;
-			let (r, g, b, a) = color.to_rgba_f();
-			let color = [r, g, b, a];
-			state
-				.hs
-				.core
-				.set_shader_uniform("base_color", &[color][..])
-				.ok();
+				// THIS IS HORRIBLE
+				let color = scene.color;
+				let (r, g, b, a) = color.to_rgba_f();
+				let color = [r, g, b, a];
+				state
+					.hs
+					.core
+					.set_shader_uniform("base_color", &[color][..])
+					.ok();
 
-			state.get_scene(&scene.scene).unwrap().draw(
-				&state.hs.core,
-				&state.hs.prim,
-				|idx, _| scene.animation_states.get(&(idx as i32)).map(|s| &s.state),
-				material_mapper,
-				pos_fn,
-			);
+				state.get_scene(&scene.scene).unwrap().draw(
+					&state.hs.core,
+					&state.hs.prim,
+					|idx, _| scene.animation_states.get(&(idx as i32)).map(|s| &s.state),
+					material_mapper,
+					pos_fn,
+				);
+			}
+		}
+		else
+		{
+			for (_, (position, scene)) in self
+				.world
+				.query::<(&comps::Position, &comps::Scene)>()
+				.iter()
+			{
+				let shift = Isometry3 {
+					translation: position.draw_pos(alpha).coords.into(),
+					rotation: position.draw_rot(alpha),
+				}
+				.to_homogeneous();
+				let scale = Matrix4::new_nonuniform_scaling(&position.draw_scale(alpha));
+
+				let pos_fn = |obj_pos: Point3<f32>,
+				              obj_rot: UnitQuaternion<f32>,
+				              obj_scale: Vector3<f32>| {
+					let obj_shift = Isometry3 {
+						translation: obj_pos.coords.into(),
+						rotation: obj_rot.into(),
+					}
+					.to_homogeneous();
+					let obj_scale = Matrix4::new_nonuniform_scaling(&obj_scale);
+
+					state.hs.core.use_transform(&utils::mat4_to_transform(
+						camera.to_homogeneous() * shift * scale * obj_shift * obj_scale,
+					));
+					state
+						.hs
+						.core
+						.set_shader_transform(
+							"model_matrix",
+							&utils::mat4_to_transform(shift * scale * obj_shift * obj_scale),
+						)
+						.ok();
+				};
+				// THIS IS HORRIBLE
+				let color = scene.color;
+				let (r, g, b, a) = color.to_rgba_f();
+				let color = [r, g, b, a];
+				state
+					.hs
+					.core
+					.set_shader_uniform("base_color", &[color][..])
+					.ok();
+
+				state.get_scene(&scene.scene).unwrap().draw(
+					&state.hs.core,
+					&state.hs.prim,
+					|idx, _| scene.animation_states.get(&(idx as i32)).map(|s| &s.state),
+					material_mapper,
+					pos_fn,
+				);
+			}
 		}
 
 		// Light pass.
@@ -2050,51 +2274,54 @@ impl Map
 			self.camera_pos(alpha),
 		)?;
 
-		for (_, (position, light)) in self
-			.world
-			.query::<(&comps::Position, &comps::Light)>()
-			.iter()
+		if !self.show_map
 		{
-			let shift = Isometry3::new(position.draw_pos(alpha).coords, Vector3::zeros());
-			let transform = Similarity3::from_isometry(shift, 0.5 * light.intensity.sqrt());
-			let light_pos = transform.transform_point(&Point3::origin());
-
-			let (r, g, b) = light.color.to_rgb_f();
-
-			state
-				.hs
-				.core
-				.set_shader_uniform("light_color", &[[r, g, b, 1.0]][..])
-				.ok(); //.unwrap();
-			state
-				.hs
-				.core
-				.set_shader_uniform("light_pos", &[[light_pos.x, light_pos.y, light_pos.z]][..])
-				.ok(); //.unwrap();
-			state
-				.hs
-				.core
-				.set_shader_uniform("light_intensity", &[light.intensity][..])
-				.ok(); //.unwrap();
-			state
-				.hs
-				.core
-				.set_shader_uniform("is_static", &[light.static_ as i32][..])
-				.ok(); //.unwrap();
-
-			state.hs.core.use_transform(&utils::mat4_to_transform(
-				camera.to_homogeneous() * transform.to_homogeneous(),
-			));
-
-			if let Ok(scene) = state.get_scene("data/sphere.glb")
+			for (_, (position, light)) in self
+				.world
+				.query::<(&comps::Position, &comps::Light)>()
+				.iter()
 			{
-				scene.draw(
-					&state.hs.core,
-					&state.hs.prim,
-					|_, _| None,
-					|_, s| state.get_bitmap(s).into_slhack(),
-					|_, _, _| {},
-				);
+				let shift = Isometry3::new(position.draw_pos(alpha).coords, Vector3::zeros());
+				let transform = Similarity3::from_isometry(shift, 0.5 * light.intensity.sqrt());
+				let light_pos = transform.transform_point(&Point3::origin());
+
+				let (r, g, b) = light.color.to_rgb_f();
+
+				state
+					.hs
+					.core
+					.set_shader_uniform("light_color", &[[r, g, b, 1.0]][..])
+					.ok(); //.unwrap();
+				state
+					.hs
+					.core
+					.set_shader_uniform("light_pos", &[[light_pos.x, light_pos.y, light_pos.z]][..])
+					.ok(); //.unwrap();
+				state
+					.hs
+					.core
+					.set_shader_uniform("light_intensity", &[light.intensity][..])
+					.ok(); //.unwrap();
+				state
+					.hs
+					.core
+					.set_shader_uniform("is_static", &[light.static_ as i32][..])
+					.ok(); //.unwrap();
+
+				state.hs.core.use_transform(&utils::mat4_to_transform(
+					camera.to_homogeneous() * transform.to_homogeneous(),
+				));
+
+				if let Ok(scene) = state.get_scene("data/sphere.glb")
+				{
+					scene.draw(
+						&state.hs.core,
+						&state.hs.prim,
+						|_, _| None,
+						|_, s| state.get_bitmap(s).into_slhack(),
+						|_, _, _| {},
+					);
+				}
 			}
 		}
 
@@ -2109,6 +2336,7 @@ impl Map
 			state.hs.buffer1.as_ref().unwrap(),
 		)?;
 		unsafe {
+			gl::CullFace(gl::BACK);
 			gl::DepthMask(gl::TRUE);
 		}
 
@@ -2146,20 +2374,23 @@ impl Map
 			.set_blender(BlendOperation::Add, BlendMode::One, BlendMode::One);
 
 		// Second forward pass, for additive stuff.
-		for (_, (position, scene)) in self
-			.world
-			.query::<(&comps::Position, &comps::AdditiveScene)>()
-			.iter()
+		if !self.show_map
 		{
-			let shift = Isometry3 {
-				translation: position.draw_pos(alpha).coords.into(),
-				rotation: position.draw_rot(alpha),
-			}
-			.to_homogeneous();
-			let scale = Matrix4::new_nonuniform_scaling(&position.draw_scale(alpha));
+			for (_, (position, scene)) in self
+				.world
+				.query::<(&comps::Position, &comps::AdditiveScene)>()
+				.iter()
+			{
+				let shift = Isometry3 {
+					translation: position.draw_pos(alpha).coords.into(),
+					rotation: position.draw_rot(alpha),
+				}
+				.to_homogeneous();
+				let scale = Matrix4::new_nonuniform_scaling(&position.draw_scale(alpha));
 
-			let pos_fn =
-				|obj_pos: Point3<f32>, obj_rot: UnitQuaternion<f32>, obj_scale: Vector3<f32>| {
+				let pos_fn = |obj_pos: Point3<f32>,
+				              obj_rot: UnitQuaternion<f32>,
+				              obj_scale: Vector3<f32>| {
 					let obj_shift = Isometry3 {
 						translation: obj_pos.coords.into(),
 						rotation: obj_rot.into(),
@@ -2172,23 +2403,24 @@ impl Map
 					));
 				};
 
-			// THIS IS HORRIBLE
-			let color = scene.color;
-			let (r, g, b, a) = color.to_rgba_f();
-			let color = [r, g, b, a];
-			state
-				.hs
-				.core
-				.set_shader_uniform("base_color", &[color][..])
-				.ok();
+				// THIS IS HORRIBLE
+				let color = scene.color;
+				let (r, g, b, a) = color.to_rgba_f();
+				let color = [r, g, b, a];
+				state
+					.hs
+					.core
+					.set_shader_uniform("base_color", &[color][..])
+					.ok();
 
-			state.get_scene(&scene.scene).unwrap().draw(
-				&state.hs.core,
-				&state.hs.prim,
-				|idx, _| scene.animation_states.get(&(idx as i32)).map(|s| &s.state),
-				material_mapper,
-				pos_fn,
-			);
+				state.get_scene(&scene.scene).unwrap().draw(
+					&state.hs.core,
+					&state.hs.prim,
+					|idx, _| scene.animation_states.get(&(idx as i32)).map(|s| &s.state),
+					material_mapper,
+					pos_fn,
+				);
+			}
 		}
 
 		state

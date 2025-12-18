@@ -97,6 +97,27 @@ impl Scene
 }
 
 #[derive(Debug, Clone)]
+pub struct MapScene
+{
+	pub scene: String,
+	pub color: Color,
+	// This indexes into the Scene's objects
+	pub animation_states: HashMap<i32, AnimationState>,
+}
+
+impl MapScene
+{
+	pub fn new(scene: &str) -> Self
+	{
+		Self {
+			scene: scene.to_string(),
+			color: Color::from_rgb_f(1., 1., 1.),
+			animation_states: HashMap::new(),
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
 pub struct AdditiveScene
 {
 	pub scene: String,
