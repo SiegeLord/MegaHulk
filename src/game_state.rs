@@ -222,7 +222,7 @@ impl GameState
 			Ok(options.gfx.clone())
 		};
 		let hack_state =
-			hack_state::HackState::new("Example3D", hack_load_options, Some((640, 480)))?;
+			hack_state::HackState::new("MegaHulk", hack_load_options, Some((640, 480)))?;
 
 		let sfx = sfx::Sfx::new(options.sfx_volume, options.music_volume, &hack_state.core)?;
 		//sfx.set_music_file("data/lemonade-sinus.xm");

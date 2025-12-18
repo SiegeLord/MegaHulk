@@ -142,6 +142,7 @@ pub struct Controller
 	pub want_rotate: Vector3<f32>,
 	pub want_gripper: [bool; 2],
 	pub want_fire: bool,
+	pub force_attach: bool,
 }
 
 impl Controller
@@ -153,6 +154,7 @@ impl Controller
 			want_rotate: Vector3::zeros(),
 			want_gripper: [false, false],
 			want_fire: false,
+			force_attach: false,
 		}
 	}
 }

@@ -331,6 +331,30 @@ pub fn spawn_player_exit_track(
 			scene::AnimationState::new("Play", true),
 		),
 		comps::PositionCopier { target },
+	));
+	Ok(entity)
+}
+
+pub fn spawn_exit_explosions(
+	scene_name: &str, obj_name: &str, world: &mut hecs::World, state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene = state.get_scene(scene_name)?;
+	let obj_idx = scene
+		.objects
+		.iter()
+		.position(|obj| obj.name.starts_with(obj_name));
+
+	let obj_idx =
+		obj_idx.ok_or_else(|| format!("Could not find {} in {}", obj_name, scene_name))?;
+
+	let entity = world.spawn((
+		comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
+		comps::SceneObjectPosition::new(
+			scene_name,
+			obj_idx as i32,
+			scene::AnimationState::new("Play", true),
+		),
 		comps::ExplosionSpawner::new(),
 	));
 	Ok(entity)
@@ -552,11 +576,22 @@ pub fn spawn_connector(
 	game_state::cache_scene(state, scene_name)?;
 	let mut scene = comps::AdditiveScene::new(scene_name);
 	scene.color = Color::from_rgb_f(0.0, 0.5, 0.0);
-	let entity = world.spawn((
-		comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
-		comps::Connector::new(start, end, start_offset, end_offset),
-		scene,
-	));
+
+	let mut position = comps::Position::new(Point3::origin(), UnitQuaternion::identity());
+	let connector = comps::Connector::new(start, end, start_offset, end_offset);
+
+	let start_position = *world.get::<&comps::Position>(start)?;
+	let end_position = *world.get::<&comps::Position>(end)?;
+
+	set_connector_position(
+		&connector,
+		&mut position,
+		&start_position,
+		&end_position,
+		state,
+	);
+
+	let entity = world.spawn((position, connector, scene));
 	Ok(entity)
 }
 
@@ -896,6 +931,27 @@ pub fn spawn_level(
 	Ok((entity, player))
 }
 
+fn set_connector_position(
+	connector: &comps::Connector, position: &mut comps::Position, start_position: &comps::Position,
+	end_position: &comps::Position, state: &game_state::GameState,
+)
+{
+	let start_pos = start_position.pos + start_position.rot * connector.start_offset;
+	let end_pos = end_position.pos + end_position.rot * connector.end_offset;
+
+	let dir = (end_pos - start_pos).normalize();
+	let rot =
+		UnitQuaternion::from_axis_angle(&Unit::new_unchecked(dir), 5. * state.hs.time() as f32);
+	let new_pos = ((start_pos.coords + end_pos.coords) / 2.0).into();
+	let new_rot = rot * UnitQuaternion::face_towards(&dir, &Vector3::y());
+	let new_scale = Vector3::new(1., 1., (start_pos - end_pos).norm() / 2.);
+
+	position.pos = new_pos;
+	position.rot = new_rot;
+	position.scale = new_scale;
+	position.snapshot();
+}
+
 struct Map
 {
 	world: hecs::World,
@@ -904,6 +960,7 @@ struct Map
 	level_name: String,
 	camera: hecs::Entity,
 	player: hecs::Entity,
+	accept_input: bool,
 	level: hecs::Entity,
 	delayed_effects: Vec<(comps::Effect, hecs::Entity, Option<hecs::Entity>)>,
 }
@@ -925,6 +982,7 @@ impl Map
 			physics: physics,
 			camera_target: comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
 			player: player,
+			accept_input: true,
 			camera: player,
 			level_name: level_name.to_string(),
 			level: level,
@@ -952,7 +1010,6 @@ impl Map
 		// Player.
 		if self.world.contains(self.player)
 		{
-			let position = self.world.get::<&comps::Position>(self.player).unwrap();
 			let mut controller = self
 				.world
 				.get::<&mut comps::Controller>(self.player)
@@ -982,15 +1039,18 @@ impl Map
 					.controls
 					.get_action_state(game_state::Action::RotateDown);
 
-			controller.want_move = Vector3::new(right_left, up_down, 0.);
-			controller.want_rotate = Vector3::new(-rot_up_down, -rot_right_left, 0.);
-
-			for (idx, action) in [game_state::Action::GripLeft, game_state::Action::GripRight]
-				.iter()
-				.enumerate()
+			if self.accept_input
 			{
-				controller.want_gripper[idx] = state.controls.get_action_state(*action) > 0.5;
-				state.controls.clear_action_state(*action);
+				controller.want_move = Vector3::new(right_left, up_down, 0.);
+				controller.want_rotate = Vector3::new(-rot_up_down, -rot_right_left, 0.);
+
+				for (idx, action) in [game_state::Action::GripLeft, game_state::Action::GripRight]
+					.iter()
+					.enumerate()
+				{
+					controller.want_gripper[idx] = state.controls.get_action_state(*action) > 0.5;
+					state.controls.clear_action_state(*action);
+				}
 			}
 		}
 		if let Ok(position) = self.world.get::<&comps::Position>(self.camera)
@@ -1292,14 +1352,14 @@ impl Map
 			for (want_gripper, gripper_id) in
 				itertools::izip!(&controller.want_gripper, &mut grippers.grippers,)
 			{
-				if *want_gripper
+				if *want_gripper || controller.force_attach
 				{
-					want_grip.push((id, *position, *gripper_id));
+					want_grip.push((id, *position, *gripper_id, controller.force_attach));
 				}
 			}
 		}
 
-		for (id, parent_position, gripper_id) in want_grip
+		for (id, parent_position, gripper_id, force_attach) in want_grip
 		{
 			let mut attach = false;
 			let gripper_offset;
@@ -1315,7 +1375,7 @@ impl Map
 				{
 					comps::GripperStatus::AttachedToParent =>
 					{
-						if state.hs.time() >= gripper.time_to_grip
+						if state.hs.time() >= gripper.time_to_grip && !force_attach
 						{
 							let gripper_body = self
 								.physics
@@ -1462,22 +1522,7 @@ impl Map
 			connector_ends
 		)
 		{
-			let start_pos = start_position.pos + start_position.rot * connector.start_offset;
-			let end_pos = end_position.pos + end_position.rot * connector.end_offset;
-
-			let dir = (end_pos - start_pos).normalize();
-			let rot = UnitQuaternion::from_axis_angle(
-				&Unit::new_unchecked(dir),
-				5. * state.hs.time() as f32,
-			);
-			let new_pos = ((start_pos.coords + end_pos.coords) / 2.0).into();
-			let new_rot = rot * UnitQuaternion::face_towards(&dir, &Vector3::y());
-			let new_scale = Vector3::new(1., 1., (start_pos - end_pos).norm() / 2.);
-
-			position.pos = new_pos;
-			position.rot = new_rot;
-			position.scale = new_scale;
-			position.snapshot();
+			set_connector_position(&connector, position, &start_position, &end_position, state);
 		}
 
 		// SceneObjectPosition.
@@ -1524,13 +1569,12 @@ impl Map
 			if state.hs.time > explosion_spawner.time_for_explosion
 			{
 				let mut rng = rand::rng();
-				let (forward, _, _) = get_dirs(position.rot);
 				let pos = position.pos
-					+ -5. * forward + Vector3::new(
-					rng.random_range(-1.0..=1.0),
-					rng.random_range(-1.0..=1.0),
-					rng.random_range(-1.0..=1.0),
-				);
+					+ Vector3::new(
+						rng.random_range(-1.0..=1.0),
+						rng.random_range(-1.0..=1.0),
+						rng.random_range(-1.0..=1.0),
+					);
 				spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
 					spawn_explosion(pos, &mut map.world, state)
 				}));
@@ -1683,6 +1727,12 @@ impl Map
 					}
 					comps::Effect::StartExitAnimation =>
 					{
+						spawn_exit_explosions(
+							&self.level_name,
+							"ExitExplosions",
+							&mut self.world,
+							state,
+						)?;
 						spawn_player_exit_track(
 							&self.level_name,
 							"ExitTrack",
@@ -1696,6 +1746,12 @@ impl Map
 							&mut self.world,
 							state,
 						)?;
+						if let Ok(mut controller) =
+							self.world.get::<&mut comps::Controller>(self.player)
+						{
+							controller.force_attach = true;
+						}
+						self.accept_input = false;
 					}
 				}
 			}
@@ -1750,7 +1806,9 @@ impl Map
 
 	fn make_project(&self, state: &game_state::GameState) -> Perspective3<f32>
 	{
-		utils::projection_transform(state.hs.buffer_width(), state.hs.buffer_height(), PI / 3.)
+		let dw = state.hs.buffer_width();
+		let dh = state.hs.buffer_height();
+		Perspective3::new(dw / dh, PI / 3., 0.1, 25.)
 	}
 
 	fn camera_pos(&self, alpha: f32) -> Point3<f32>
@@ -1837,7 +1895,6 @@ impl Map
 			.to_homogeneous();
 			let scale = Matrix4::new_nonuniform_scaling(&position.draw_scale(alpha));
 
-			// OOOOH NOOO DO WE NEED DRAW INTERPOLATION HERE TOO?
 			let pos_fn =
 				|obj_pos: Point3<f32>, obj_rot: UnitQuaternion<f32>, obj_scale: Vector3<f32>| {
 					let obj_shift = Isometry3 {
@@ -1935,12 +1992,18 @@ impl Map
 		}
 
 		// Final pass.
+		unsafe {
+			gl::DepthMask(gl::FALSE);
+		}
 		state.deferred_renderer.as_mut().unwrap().final_pass(
 			&state.hs.core,
 			&state.hs.prim,
 			state.final_shader.as_ref().unwrap(),
 			state.hs.buffer1.as_ref().unwrap(),
 		)?;
+		unsafe {
+			gl::DepthMask(gl::TRUE);
+		}
 
 		// TODO: NO WAY!
 		let material_mapper = |material: &scene::Material<game_state::MaterialKind>,
