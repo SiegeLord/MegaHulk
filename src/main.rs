@@ -84,6 +84,16 @@ impl game_loop::LoopState for LoopState
 			"data/final",
 			&replacements,
 		)?);
+		game_state.map_depth_shader = Some(utils::load_shader(
+			hs.display_mut(),
+			"data/map_depth",
+			&replacements,
+		)?);
+		game_state.exploration_shader = Some(utils::load_shader(
+			hs.display_mut(),
+			"data/exploration",
+			&replacements,
+		)?);
 		let (width, height) = hs.fixed_buffer_size.unwrap();
 		game_state.deferred_renderer = Some(deferred::DeferredRenderer::new(
 			hs.display.as_mut().unwrap(),

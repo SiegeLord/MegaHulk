@@ -103,6 +103,8 @@ pub struct MapScene
 	pub color: Color,
 	// This indexes into the Scene's objects
 	pub animation_states: HashMap<i32, AnimationState>,
+	pub occluding: bool,
+	pub explored: bool,
 }
 
 impl MapScene
@@ -113,6 +115,8 @@ impl MapScene
 			scene: scene.to_string(),
 			color: Color::from_rgb_f(1., 1., 1.),
 			animation_states: HashMap::new(),
+			occluding: true,
+			explored: false,
 		}
 	}
 }
@@ -402,17 +406,19 @@ pub struct Door
 	pub status: DoorStatus,
 	pub time_to_close: f64,
 	pub want_open: bool,
+	pub closest_vtx: (usize, usize),
 }
 
 impl Door
 {
-	pub fn new(open_on_exit: bool) -> Self
+	pub fn new(open_on_exit: bool, closest_vtx: (usize, usize)) -> Self
 	{
 		Door {
 			open_on_exit: open_on_exit,
 			status: DoorStatus::Closed,
 			time_to_close: 0.,
 			want_open: false,
+			closest_vtx: closest_vtx,
 		}
 	}
 }

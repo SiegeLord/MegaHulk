@@ -16,7 +16,7 @@ use std::{fmt, path, sync};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DT: f32 = 1. / 60.;
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 #[repr(i32)]
 pub enum MaterialKind
 {
@@ -184,7 +184,8 @@ impl Default for Options
 	}
 }
 
-type Scene = scene::Scene<MaterialKind>;
+pub type Scene = scene::Scene<MaterialKind>;
+pub type Object = scene::Object<MaterialKind>;
 
 #[derive(Debug)]
 pub enum NextScreen
@@ -207,6 +208,8 @@ pub struct GameState
 	pub forward2_shader: Option<Shader>,
 	pub light_shader: Option<Shader>,
 	pub final_shader: Option<Shader>,
+	pub map_depth_shader: Option<Shader>,
+	pub exploration_shader: Option<Shader>,
 	pub deferred_renderer: Option<deferred::DeferredRenderer>,
 
 	bitmaps: HashMap<String, Bitmap>,
@@ -257,7 +260,9 @@ impl GameState
 			forward2_shader: None,
 			light_shader: None,
 			final_shader: None,
+			map_depth_shader: None,
 			deferred_renderer: None,
+			exploration_shader: None,
 			hs: hack_state,
 		})
 	}
@@ -332,15 +337,17 @@ impl GameState
 	}
 
 	pub fn with_scene<T>(
-		&mut self, name: &str,
-		scene_fn: impl FnOnce(&mut Display, &mut PrimitivesAddon, &Scene) -> Result<T>,
+		&mut self, name: &str, scene_fn: impl FnOnce(&mut GameState, &Scene) -> Result<T>,
 	) -> Result<T>
 	{
-		let scene = self
-			.scenes
+		let mut dummy_scenes = HashMap::new();
+		std::mem::swap(&mut dummy_scenes, &mut self.scenes);
+		let scene = dummy_scenes
 			.get(name)
 			.ok_or_else(|| format!("{name} is not cached!"))?;
-		scene_fn(self.hs.display.as_mut().unwrap(), &mut self.hs.prim, scene)
+		let res = scene_fn(self, scene);
+		std::mem::swap(&mut dummy_scenes, &mut self.scenes);
+		res
 	}
 }
 

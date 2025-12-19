@@ -1,6 +1,9 @@
 Map
-    Add doors to the map
+    Door exploration broken?
+    Too easy to see through doors?
     Weird motion when entering the map
-    Rethink map exploration... cast rays... via picking?
 
 Make the hit spawn closer to the collision hull of the target.
+
+Cleanup
+    I hate how the vertex access is done.

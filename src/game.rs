@@ -3,6 +3,7 @@ use crate::game_state::DT;
 use crate::{components as comps, game_state, ui, utils};
 use allegro::*;
 use allegro_font::*;
+use allegro_sys::*;
 use itertools::Itertools;
 use na::{
 	Isometry3, Matrix4, Perspective3, Point2, Point3, Quaternion, RealField, Rotation2, Rotation3,
@@ -526,11 +527,13 @@ pub fn spawn_player(
 {
 	let scene_name = "data/test.glb";
 	game_state::cache_scene(state, scene_name)?;
+	let mut map_scene = comps::MapScene::new(scene_name);
+	map_scene.explored = true;
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Controller::new(),
 		comps::Scene::new(scene_name),
-		comps::MapScene::new(scene_name),
+		map_scene,
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -762,19 +765,53 @@ pub fn spawn_light(
 	Ok(entity)
 }
 
-pub fn spawn_door(
-	pos: Point3<f32>, rot: UnitQuaternion<f32>, open_on_exit: bool, physics: &mut Physics,
-	world: &mut hecs::World, state: &mut game_state::GameState,
+fn spawn_door(
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, open_on_exit: bool, level_map: &LevelMap,
+	physics: &mut Physics, world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	let scene_name = "data/door1.glb";
+	let map_scene_name = "data/door_map.glb";
+	game_state::cache_scene(state, map_scene_name)?;
 	let scene = game_state::cache_scene(state, scene_name)?;
+
+	// Coding this at 3AM... it's not good.
+	let mut closest = None;
+	let mut closest_dist = std::f32::INFINITY;
+	{
+		let pos = level_map.object.pos;
+		let rot = level_map.object.rot;
+		let scale = level_map.object.scale;
+		let shift = Isometry3 {
+			translation: pos.coords.into(),
+			rotation: rot.into(),
+		}
+		.to_homogeneous();
+		let scale = Matrix4::new_nonuniform_scaling(&scale);
+		let transform = Transform3::from_matrix_unchecked(shift * scale);
+		if let slhack::scene::ObjectKind::MultiMesh { meshes } = &level_map.object.kind
+		{
+			for (mesh_idx, mesh) in meshes.iter().enumerate()
+			{
+				for (vtx_idx, vtx) in mesh.vtxs.iter().enumerate()
+				{
+					let dist = (transform * Vector3::new(vtx.x, vtx.y, vtx.z) - pos.coords).norm();
+					if dist < closest_dist
+					{
+						closest_dist = dist;
+						closest = Some((mesh_idx, vtx_idx));
+					}
+				}
+			}
+		}
+	}
 
 	//scene.animation_states = animation_states;
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Scene::new(scene_name),
-		comps::Door::new(open_on_exit),
+		comps::MapScene::new(map_scene_name),
+		comps::Door::new(open_on_exit, closest.unwrap()),
 		comps::OnCollideEffects::new(&[comps::Effect::Open]),
 	));
 
@@ -885,7 +922,39 @@ fn get_collision_trimeshes(
 
 struct LevelMap
 {
-	object: slhack::scene::Object<game_state::MaterialKind>,
+	object: game_state::Object,
+	depth_output: Bitmap,
+	exploration_buffer: Bitmap,
+	dirty: bool,
+}
+
+impl LevelMap
+{
+	fn new(object: game_state::Object, state: &game_state::GameState) -> Result<Self>
+	{
+		let buffer_width = (state.hs.buffer_width() / 2.) as i32;
+		let buffer_height = (state.hs.buffer_height() / 2.) as i32;
+
+		let old_depth = state.hs.core.get_new_bitmap_depth();
+		let old_format = state.hs.core.get_new_bitmap_format();
+		state.hs.core.set_new_bitmap_depth(16);
+		let depth_output = Bitmap::new(&state.hs.core, buffer_width, buffer_height)
+			.map_err(|_| "Couldn't create depth output".to_string())?;
+		state.hs.core.set_new_bitmap_depth(old_depth);
+		state.hs.core.set_new_bitmap_format(old_format);
+
+		let exploration_buffer = Bitmap::new(&state.hs.core, 256, 256)
+			.map_err(|_| "Couldn't create exploration buffer".to_string())?;
+		state.hs.core.set_target_bitmap(Some(&exploration_buffer));
+		state.hs.core.clear_to_color(Color::from_rgb_f(0., 0., 0.));
+
+		Ok(Self {
+			depth_output: depth_output,
+			exploration_buffer: exploration_buffer,
+			object: object,
+			dirty: false,
+		})
+	}
 }
 
 fn spawn_level(
@@ -895,11 +964,15 @@ fn spawn_level(
 {
 	game_state::cache_scene(state, scene_name)?;
 
-	let level_map = state.with_scene(scene_name, |display, prim, level_scene| {
+	let level_map = state.with_scene(scene_name, |state, level_scene| {
 		let obj_idx = level_scene.objects.iter().position(|o| o.name == "Level");
 		let obj_idx =
 			obj_idx.ok_or_else(|| format!("Level {} has no Level object.", scene_name))?;
-		let mut map_object = level_scene.objects[obj_idx].create_clone(display, prim, false)?;
+		let mut map_object = level_scene.objects[obj_idx].create_clone(
+			state.hs.display.as_mut().unwrap(),
+			&state.hs.prim,
+			false,
+		)?;
 
 		if let slhack::scene::ObjectKind::MultiMesh { meshes } = &mut map_object.kind
 		{
@@ -917,7 +990,7 @@ fn spawn_level(
 				lock.copy_from_slice(&mesh.vtxs);
 			}
 		}
-		Ok(LevelMap { object: map_object })
+		LevelMap::new(map_object, state)
 	})?;
 
 	let level_scene = state.get_scene(scene_name)?;
@@ -948,6 +1021,7 @@ fn spawn_level(
 			dyn FnOnce(
 				&mut Physics,
 				&mut hecs::World,
+				&LevelMap,
 				&mut game_state::GameState,
 			) -> Result<hecs::Entity>,
 		>,
@@ -987,15 +1061,15 @@ fn spawn_level(
 						.and_then(|b| b.as_bool())
 						.unwrap_or(false);
 					spawn_fns.push(Box::new(
-						move |physics, world, state| -> Result<hecs::Entity> {
-							spawn_door(pos, rot, open_on_exit, physics, world, state)
+						move |physics, world, level_map, state| -> Result<hecs::Entity> {
+							spawn_door(pos, rot, open_on_exit, &level_map, physics, world, state)
 						},
 					));
 				}
 				else if object.name.starts_with("Robot")
 				{
 					spawn_fns.push(Box::new(
-						move |physics, world, state| -> Result<hecs::Entity> {
+						move |physics, world, _level_map, state| -> Result<hecs::Entity> {
 							spawn_robot(pos, rot, physics, world, state)
 						},
 					));
@@ -1003,7 +1077,7 @@ fn spawn_level(
 				else if object.name.starts_with("Reactor")
 				{
 					spawn_fns.push(Box::new(
-						move |physics, world, state| -> Result<hecs::Entity> {
+						move |physics, world, _level_map, state| -> Result<hecs::Entity> {
 							spawn_reactor(pos, rot, physics, world, state)
 						},
 					));
@@ -1011,7 +1085,7 @@ fn spawn_level(
 				else if object.name.starts_with("ExitTrigger")
 				{
 					spawn_fns.push(Box::new(
-						move |physics, world, _state| -> Result<hecs::Entity> {
+						move |physics, world, _level_map, _state| -> Result<hecs::Entity> {
 							spawn_exit_trigger(pos, rot, physics, world)
 						},
 					));
@@ -1032,7 +1106,7 @@ fn spawn_level(
 
 	for spawn_fn in spawn_fns
 	{
-		spawn_fn(physics, world, state)?;
+		spawn_fn(physics, world, &level_map, state)?;
 	}
 
 	Ok((entity, level_map, player))
@@ -1183,37 +1257,143 @@ impl Map
 				}
 			}
 
-			let position = self.world.get::<&comps::Position>(self.player)?;
-			//self.physics.
-			let (pos, rot, scale) = (
-				self.level_map.object.pos,
-				self.level_map.object.rot,
-				self.level_map.object.scale,
-			);
-			let shift = Isometry3 {
-				translation: pos.coords.into(),
-				rotation: rot.into(),
-			}
-			.to_homogeneous();
-			let scale = Matrix4::new_nonuniform_scaling(&scale);
-			let transform = Transform3::from_matrix_unchecked(shift * scale);
-
-			if let slhack::scene::ObjectKind::MultiMesh { meshes } = &mut self.level_map.object.kind
+			if !self.show_map
 			{
-				for mesh in meshes
-				{
-					let len = mesh.vertex_buffer.len();
-					for vtx in &mut mesh.vtxs
-					{
-						let vtx_pos = transform * Vector3::new(vtx.x, vtx.y, vtx.z);
-						if (vtx_pos - position.pos.coords).norm() < 4.
-						{
-							vtx.color = Color::from_rgb_f(1., 1., 1.);
-						}
-					}
-					let mut lock = mesh.vertex_buffer.lock_write_only(0, len).unwrap();
-					lock.copy_from_slice(&mesh.vtxs);
+				// LevelMap visibility.
+				// Depth pass.
+				let project = self.make_project_raw(
+					self.level_map.depth_output.get_width() as f32,
+					self.level_map.depth_output.get_height() as f32,
+				);
+				let camera = self.make_camera(0.);
+
+				state
+					.hs
+					.core
+					.set_target_bitmap(Some(&self.level_map.depth_output));
+				state
+					.hs
+					.core
+					.use_projection_transform(&utils::mat4_to_transform(project.to_homogeneous()));
+				state
+					.hs
+					.core
+					.use_transform(&utils::mat4_to_transform(camera.to_homogeneous()));
+				state
+					.hs
+					.core
+					.use_shader(Some(state.map_depth_shader.as_ref().unwrap()))
+					.unwrap();
+
+				unsafe {
+					gl::Enable(gl::CULL_FACE);
+					gl::CullFace(gl::BACK);
+					gl::DepthMask(gl::TRUE);
 				}
+				state.hs.core.clear_depth_buffer(1.);
+				state.hs.core.set_depth_test(Some(DepthFunction::Less));
+				state
+					.hs
+					.core
+					.set_blender(BlendOperation::Add, BlendMode::One, BlendMode::Zero);
+
+				state.hs.core.set_shader_uniform("visible", &[0.][..]).ok();
+				for (_, (position, scene)) in self
+					.world
+					.query::<(&comps::Position, &comps::MapScene)>()
+					.iter()
+				{
+					if !scene.occluding
+					{
+						continue;
+					}
+					let shift = Isometry3 {
+						translation: position.pos.coords.into(),
+						rotation: position.rot,
+					}
+					.to_homogeneous();
+					let scale = Matrix4::new_nonuniform_scaling(&position.scale);
+
+					let pos_fn = |obj_pos: Point3<f32>,
+					              obj_rot: UnitQuaternion<f32>,
+					              obj_scale: Vector3<f32>| {
+						let obj_shift = Isometry3 {
+							translation: obj_pos.coords.into(),
+							rotation: obj_rot.into(),
+						}
+						.to_homogeneous();
+						let obj_scale = Matrix4::new_nonuniform_scaling(&obj_scale);
+
+						state.hs.core.use_transform(&utils::mat4_to_transform(
+							camera.to_homogeneous() * shift * scale * obj_shift * obj_scale,
+						));
+					};
+
+					state.get_scene(&scene.scene).unwrap().draw(
+						&state.hs.core,
+						&state.hs.prim,
+						|_, _| None,
+						|_, _| None,
+						pos_fn,
+					);
+				}
+
+				let pos_fn = |obj_pos: Point3<f32>,
+				              obj_rot: UnitQuaternion<f32>,
+				              obj_scale: Vector3<f32>| {
+					let obj_shift = Isometry3 {
+						translation: obj_pos.coords.into(),
+						rotation: obj_rot.into(),
+					}
+					.to_homogeneous();
+					let obj_scale = Matrix4::new_nonuniform_scaling(&obj_scale);
+
+					state.hs.core.use_transform(&utils::mat4_to_transform(
+						camera.to_homogeneous() * obj_shift * obj_scale,
+					));
+				};
+
+				state.hs.core.set_shader_uniform("visible", &[1.][..]).ok();
+				self.level_map.object.draw(
+					&state.hs.core,
+					&state.hs.prim,
+					None,
+					|_, _| None,
+					pos_fn,
+				);
+
+				// Exploration pass.
+				state
+					.hs
+					.core
+					.set_target_bitmap(Some(&self.level_map.exploration_buffer));
+				state
+					.hs
+					.core
+					.use_shader(Some(state.exploration_shader.as_ref().unwrap()))
+					.unwrap();
+
+				state
+					.hs
+					.core
+					.use_projection_transform(&utils::mat4_to_transform(project.to_homogeneous()));
+				unsafe {
+					gl::Disable(gl::CULL_FACE);
+					gl::DepthMask(gl::FALSE);
+				}
+				state.hs.core.set_depth_test(None);
+				state
+					.hs
+					.core
+					.set_blender(BlendOperation::Add, BlendMode::One, BlendMode::One);
+				self.level_map.object.draw(
+					&state.hs.core,
+					&state.hs.prim,
+					None,
+					|_, _| Some(&self.level_map.depth_output),
+					pos_fn,
+				);
+				self.level_map.dirty = true;
 			}
 		}
 		if let Ok(position) = self.world.get::<&comps::Position>(self.camera)
@@ -1231,6 +1411,45 @@ impl Map
 		{
 			state.controls.clear_action_state(game_state::Action::Map);
 			self.show_map = !self.show_map;
+		}
+		if self.show_map && self.level_map.dirty
+		{
+			let w = self.level_map.exploration_buffer.get_width();
+			let h = self.level_map.exploration_buffer.get_height();
+			let exploration_buffer_allegro = self.level_map.exploration_buffer.get_allegro_bitmap();
+			let _lock =
+				self.level_map
+					.exploration_buffer
+					.lock(0, 0, w, h, PixelFormat::Argb8888, false);
+
+			if let slhack::scene::ObjectKind::MultiMesh { meshes } = &mut self.level_map.object.kind
+			{
+				for mesh in meshes
+				{
+					for vtx in &mut mesh.vtxs
+					{
+						for dy in -2..=2
+						{
+							for dx in -2..=2
+							{
+								let x = (vtx.u2 * w as f32 + 0.5 as f32) as i32 + dx;
+								let y = (vtx.v2 * h as f32 + 0.5 as f32) as i32 + dy;
+								let color =
+									unsafe { al_get_pixel(exploration_buffer_allegro, x, h - y) };
+								let visible = color.r > 0.5;
+								if visible
+								{
+									vtx.color = Color::from_rgb_f(1., 1., 1.);
+								}
+							}
+						}
+					}
+					let len = mesh.vertex_buffer.len();
+					let mut lock = mesh.vertex_buffer.lock_write_only(0, len).unwrap();
+					lock.copy_from_slice(&mesh.vtxs);
+				}
+			}
+			self.level_map.dirty = false;
 		}
 
 		// AI.
@@ -1613,11 +1832,27 @@ impl Map
 		}
 
 		// Door upkeep.
-		for (id, (door, scene, physics)) in self
+		for (id, (door, map_scene, scene, physics)) in self
 			.world
-			.query::<(&mut comps::Door, &mut comps::Scene, &comps::Physics)>()
+			.query::<(
+				&mut comps::Door,
+				&mut comps::MapScene,
+				&mut comps::Scene,
+				&comps::Physics,
+			)>()
 			.iter()
 		{
+			if let slhack::scene::ObjectKind::MultiMesh { meshes } = &self.level_map.object.kind
+			{
+				let (mesh_idx, vtx_idx) = door.closest_vtx;
+				if meshes[mesh_idx].vtxs[vtx_idx].color.to_rgb_f().0 > 0.
+				{
+					map_scene.explored = true;
+				}
+			}
+
+			map_scene.occluding = door.status == comps::DoorStatus::Closed;
+
 			if door.status == comps::DoorStatus::Open
 				&& state.hs.time > door.time_to_close
 				&& !door.open_on_exit
@@ -2004,11 +2239,16 @@ impl Map
 		Ok(None)
 	}
 
+	fn make_project_raw(&self, buffer_width: f32, buffer_height: f32) -> Perspective3<f32>
+	{
+		Perspective3::new(buffer_width / buffer_height, PI / 3., 0.1, 100.)
+	}
+
 	fn make_project(&self, state: &game_state::GameState) -> Perspective3<f32>
 	{
 		let dw = state.hs.buffer_width();
 		let dh = state.hs.buffer_height();
-		Perspective3::new(dw / dh, PI / 3., 0.1, 100.)
+		self.make_project_raw(dw, dh)
 	}
 
 	fn camera_pos(&self, alpha: f32) -> Point3<f32>
@@ -2074,11 +2314,7 @@ impl Map
 
 		let material_mapper = |material: &scene::Material<game_state::MaterialKind>,
 		                       mut texture_name: &str|
-		 -> slhack::error::Result<&Bitmap> {
-			if self.show_map
-			{
-				texture_name = "data/map_texture.png"
-			}
+		 -> Option<&Bitmap> {
 			if material.desc.two_sided
 			{
 				unsafe {
@@ -2098,12 +2334,15 @@ impl Map
 					.core
 					.set_shader_sampler(
 						"lightmap",
-						state.get_bitmap(&material.desc.lightmap).into_slhack()?,
+						state
+							.get_bitmap(&material.desc.lightmap)
+							.into_slhack()
+							.unwrap(),
 						1,
 					)
 					.ok();
 			}
-			state.get_bitmap(texture_name).into_slhack()
+			state.get_bitmap(texture_name).ok()
 		};
 
 		if self.show_map
@@ -2162,6 +2401,10 @@ impl Map
 			let mut query = self.world.query::<(&comps::Position, &comps::MapScene)>();
 			for (_, (position, scene)) in query.iter()
 			{
+				if !scene.explored
+				{
+					continue;
+				}
 				let shift = Isometry3 {
 					translation: position.draw_pos(alpha).coords.into(),
 					rotation: position.draw_rot(alpha),
@@ -2318,7 +2561,7 @@ impl Map
 						&state.hs.core,
 						&state.hs.prim,
 						|_, _| None,
-						|_, s| state.get_bitmap(s).into_slhack(),
+						|_, s| state.get_bitmap(s).ok(),
 						|_, _, _| {},
 					);
 				}
@@ -2343,7 +2586,7 @@ impl Map
 		// TODO: NO WAY!
 		let material_mapper = |material: &scene::Material<game_state::MaterialKind>,
 		                       texture_name: &str|
-		 -> slhack::error::Result<&Bitmap> {
+		 -> Option<&Bitmap> {
 			if material.desc.two_sided
 			{
 				unsafe {
@@ -2356,7 +2599,7 @@ impl Map
 					gl::Enable(gl::CULL_FACE);
 				}
 			}
-			state.get_bitmap(texture_name).into_slhack()
+			state.get_bitmap(texture_name).ok()
 		};
 		state
 			.hs
@@ -2436,6 +2679,29 @@ impl Map
 			.hs
 			.core
 			.set_blender(BlendOperation::Add, BlendMode::One, BlendMode::InverseAlpha);
+		let ortho_mat = Matrix4::new_orthographic(
+			0.,
+			state.hs.buffer_width() as f32,
+			state.hs.buffer_height() as f32,
+			0.,
+			state.hs.buffer_height(),
+			-state.hs.buffer_height(),
+		);
+		state
+			.hs
+			.core
+			.use_projection_transform(&utils::mat4_to_transform(ortho_mat));
+		state.hs.core.use_transform(&Transform::identity());
+		//state
+		//	.hs
+		//	.core
+		//	.draw_bitmap(&self.level_map.exploration_buffer, 0., 0., Flag::zero());
+		// state.hs.core.draw_bitmap(
+		// 	&self.level_map.depth_output,
+		// 	state.hs.buffer_width() - self.level_map.depth_output.get_width() as f32,
+		// 	0.,
+		// 	Flag::zero(),
+		// );
 		Ok(())
 	}
 }

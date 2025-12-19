@@ -37,7 +37,7 @@ void main()
     else if (material == LEVEL_MAP_MATERIAL) {
 	float f = pow(0.5 + 0.5 * sin(length(varying_pos.xyz - player_pos) - 10. * time), 15.);
 	vec3 c1 = (0.8 + 0.2 * normal_buffer.xyz);
-	vec3 c2 = vec3(1.);
+	vec3 c2 = vec3(1., 0., 0.);
 	vec3 pulsating = mix(c1, c2, f);
 	light = vec4(mix(c1, pulsating, 1. - varying_color.a), 0.);
     }
