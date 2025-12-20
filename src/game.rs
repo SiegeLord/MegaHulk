@@ -2727,16 +2727,16 @@ impl Map
 			.core
 			.use_projection_transform(&utils::mat4_to_transform(ortho_mat));
 		state.hs.core.use_transform(&Transform::identity());
-		//state
-		//	.hs
-		//	.core
-		//	.draw_bitmap(&self.level_map.exploration_buffer, 0., 0., Flag::zero());
+		// state
+		// 	.hs
+		// 	.core
+		// 	.draw_bitmap(&self.level_map.exploration_buffer, 0., 0., Flag::zero());
 		// state.hs.core.draw_bitmap(
-		// 	&self.level_map.depth_output,
-		// 	state.hs.buffer_width() - self.level_map.depth_output.get_width() as f32,
-		// 	0.,
-		// 	Flag::zero(),
-		// );
+		//  	&self.level_map.depth_output,
+		//  	state.hs.buffer_width() - self.level_map.depth_output.get_width() as f32,
+		//  	0.,
+		//  	Flag::zero(),
+		//  );
 		Ok(())
 	}
 }
