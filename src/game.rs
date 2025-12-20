@@ -14,14 +14,14 @@ use rand::prelude::*;
 use rand_distr::Distribution;
 use rapier3d::dynamics::{
 	CCDSolver, FixedJointBuilder, ImpulseJointHandle, ImpulseJointSet, IntegrationParameters,
-	IslandManager, MassProperties, MultibodyJointSet, RigidBodyBuilder, RigidBodyHandle,
+	IslandManager, MassProperties, MultibodyJointSet, RigidBody, RigidBodyBuilder, RigidBodyHandle,
 	RigidBodySet, SpringJointBuilder,
 };
 use rapier3d::geometry::{
-	ColliderBuilder, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase, Group,
-	InteractionGroups, NarrowPhase, SharedShape, TriMeshFlags,
+	ColliderBuilder, ColliderHandle, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase,
+	Group, InteractionGroups, NarrowPhase, Ray, SharedShape, TriMeshFlags,
 };
-use rapier3d::pipeline::{ActiveEvents, EventHandler, PhysicsPipeline, QueryPipeline};
+use rapier3d::pipeline::{ActiveEvents, EventHandler, PhysicsPipeline, QueryFilter};
 use slhack::{controls, scene, sprite, ui as slhack_ui};
 
 use std::collections::HashMap;
@@ -141,6 +141,23 @@ impl Physics
 			&(),
 			event_handler,
 		);
+	}
+
+	fn ray_cast(
+		&self, pos: Point3<f32>, dir: Vector3<f32>, source: RigidBodyHandle,
+	) -> Option<(ColliderHandle, f32)>
+	{
+		let query_pipeline = self.broad_phase.as_query_pipeline(
+			self.narrow_phase.query_dispatcher(),
+			&self.rigid_body_set,
+			&self.collider_set,
+			QueryFilter::default()
+				.exclude_rigid_body(source)
+				.groups(InteractionGroups::new(BIG_GROUP, BIG_GROUP | PLAYER_GROUP)),
+		);
+
+		let ray = Ray::new(pos, dir);
+		query_pipeline.cast_ray(&ray, f32::MAX, true)
 	}
 }
 
@@ -766,8 +783,8 @@ pub fn spawn_light(
 }
 
 fn spawn_door(
-	pos: Point3<f32>, rot: UnitQuaternion<f32>, open_on_exit: bool, level_map: &LevelMap,
-	physics: &mut Physics, world: &mut hecs::World, state: &mut game_state::GameState,
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, open_on_exit: bool, physics: &mut Physics,
+	world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	let scene_name = "data/door1.glb";
@@ -775,43 +792,12 @@ fn spawn_door(
 	game_state::cache_scene(state, map_scene_name)?;
 	let scene = game_state::cache_scene(state, scene_name)?;
 
-	// Coding this at 3AM... it's not good.
-	let mut closest = None;
-	let mut closest_dist = std::f32::INFINITY;
-	{
-		let pos = level_map.object.pos;
-		let rot = level_map.object.rot;
-		let scale = level_map.object.scale;
-		let shift = Isometry3 {
-			translation: pos.coords.into(),
-			rotation: rot.into(),
-		}
-		.to_homogeneous();
-		let scale = Matrix4::new_nonuniform_scaling(&scale);
-		let transform = Transform3::from_matrix_unchecked(shift * scale);
-		if let slhack::scene::ObjectKind::MultiMesh { meshes } = &level_map.object.kind
-		{
-			for (mesh_idx, mesh) in meshes.iter().enumerate()
-			{
-				for (vtx_idx, vtx) in mesh.vtxs.iter().enumerate()
-				{
-					let dist = (transform * Vector3::new(vtx.x, vtx.y, vtx.z) - pos.coords).norm();
-					if dist < closest_dist
-					{
-						closest_dist = dist;
-						closest = Some((mesh_idx, vtx_idx));
-					}
-				}
-			}
-		}
-	}
-
 	//scene.animation_states = animation_states;
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Scene::new(scene_name),
 		comps::MapScene::new(map_scene_name),
-		comps::Door::new(open_on_exit, closest.unwrap()),
+		comps::Door::new(open_on_exit),
 		comps::OnCollideEffects::new(&[comps::Effect::Open]),
 	));
 
@@ -1007,6 +993,10 @@ fn spawn_level(
 	for (vertices, indices) in get_collision_trimeshes(level_scene)
 	{
 		let collider = ColliderBuilder::trimesh(vertices, indices)?
+			.collision_groups(InteractionGroups::new(
+				BIG_GROUP,
+				PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP,
+			))
 			.user_data(entity.to_bits().get() as u128)
 			.build();
 		physics
@@ -1021,7 +1011,6 @@ fn spawn_level(
 			dyn FnOnce(
 				&mut Physics,
 				&mut hecs::World,
-				&LevelMap,
 				&mut game_state::GameState,
 			) -> Result<hecs::Entity>,
 		>,
@@ -1061,15 +1050,15 @@ fn spawn_level(
 						.and_then(|b| b.as_bool())
 						.unwrap_or(false);
 					spawn_fns.push(Box::new(
-						move |physics, world, level_map, state| -> Result<hecs::Entity> {
-							spawn_door(pos, rot, open_on_exit, &level_map, physics, world, state)
+						move |physics, world, state| -> Result<hecs::Entity> {
+							spawn_door(pos, rot, open_on_exit, physics, world, state)
 						},
 					));
 				}
 				else if object.name.starts_with("Robot")
 				{
 					spawn_fns.push(Box::new(
-						move |physics, world, _level_map, state| -> Result<hecs::Entity> {
+						move |physics, world, state| -> Result<hecs::Entity> {
 							spawn_robot(pos, rot, physics, world, state)
 						},
 					));
@@ -1077,7 +1066,7 @@ fn spawn_level(
 				else if object.name.starts_with("Reactor")
 				{
 					spawn_fns.push(Box::new(
-						move |physics, world, _level_map, state| -> Result<hecs::Entity> {
+						move |physics, world, state| -> Result<hecs::Entity> {
 							spawn_reactor(pos, rot, physics, world, state)
 						},
 					));
@@ -1085,7 +1074,7 @@ fn spawn_level(
 				else if object.name.starts_with("ExitTrigger")
 				{
 					spawn_fns.push(Box::new(
-						move |physics, world, _level_map, _state| -> Result<hecs::Entity> {
+						move |physics, world, _state| -> Result<hecs::Entity> {
 							spawn_exit_trigger(pos, rot, physics, world)
 						},
 					));
@@ -1106,7 +1095,7 @@ fn spawn_level(
 
 	for spawn_fn in spawn_fns
 	{
-		spawn_fn(physics, world, &level_map, state)?;
+		spawn_fn(physics, world, state)?;
 	}
 
 	Ok((entity, level_map, player))
@@ -1227,8 +1216,14 @@ impl Map
 			- state
 				.controls
 				.get_action_state(game_state::Action::RotateDown);
+		let mut player_position = None;
 		if self.world.contains(self.player)
 		{
+			player_position = self
+				.world
+				.get::<&comps::Position>(self.player)
+				.ok()
+				.map(|v| (*v).clone());
 			let mut controller = self
 				.world
 				.get::<&mut comps::Controller>(self.player)
@@ -1840,9 +1835,10 @@ impl Map
 		}
 
 		// Door upkeep.
-		for (id, (door, map_scene, scene, physics)) in self
+		for (id, (position, door, map_scene, scene, physics)) in self
 			.world
 			.query::<(
+				&comps::Position,
 				&mut comps::Door,
 				&mut comps::MapScene,
 				&mut comps::Scene,
@@ -1850,12 +1846,26 @@ impl Map
 			)>()
 			.iter()
 		{
-			if let slhack::scene::ObjectKind::MultiMesh { meshes } = &self.level_map.object.kind
+			if let Some(player_position) = player_position
+				&& !map_scene.explored
 			{
-				let (mesh_idx, vtx_idx) = door.closest_vtx;
-				if meshes[mesh_idx].vtxs[vtx_idx].color.to_rgb_f().0 > 0.
+				if let Ok(player_physics) = self.world.get::<&comps::Physics>(self.player)
 				{
-					map_scene.explored = true;
+					let dir = position.pos - player_position.pos;
+					let (forward, _, _) = get_dirs(player_position.rot);
+					if forward.dot(&dir) > 0.
+					{
+						if let Some((collider_handle, _)) =
+							self.physics
+								.ray_cast(player_position.pos, dir, player_physics.handle)
+						{
+							let collider = self.physics.collider_set.get(collider_handle).unwrap();
+							if hecs::Entity::from_bits(collider.user_data as u64).unwrap() == id
+							{
+								map_scene.explored = true;
+							}
+						}
+					}
 				}
 			}
 
@@ -2321,7 +2331,7 @@ impl Map
 			.unwrap();
 
 		let material_mapper = |material: &scene::Material<game_state::MaterialKind>,
-		                       mut texture_name: &str|
+		                       texture_name: &str|
 		 -> Option<&Bitmap> {
 			if material.desc.two_sided
 			{

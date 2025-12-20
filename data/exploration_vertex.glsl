@@ -45,7 +45,7 @@ void main()
    float depth = decode_depth(texture(al_tex, uv_depth.xy).rgb);
    float cur_depth = depth_to_linear(uv_depth.z);
 
-   visible = valid * float(abs(cur_depth - depth) < 1e-1);
+   visible = valid * float(abs(cur_depth - depth) < 1.e-1);
    //visible = valid * vec3(uv_depth.z);
    //visible = valid * vec3(depth);
    //visible = valid * vec3(uv_depth.xy, 0.);

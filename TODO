@@ -1,5 +1,5 @@
 Map
-    Door exploration broken?
+    Still some leakage through closed doors...
 
 Make the hit spawn closer to the collision hull of the target.
 

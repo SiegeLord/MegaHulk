@@ -406,19 +406,17 @@ pub struct Door
 	pub status: DoorStatus,
 	pub time_to_close: f64,
 	pub want_open: bool,
-	pub closest_vtx: (usize, usize),
 }
 
 impl Door
 {
-	pub fn new(open_on_exit: bool, closest_vtx: (usize, usize)) -> Self
+	pub fn new(open_on_exit: bool) -> Self
 	{
 		Door {
 			open_on_exit: open_on_exit,
 			status: DoorStatus::Closed,
 			time_to_close: 0.,
 			want_open: false,
-			closest_vtx: closest_vtx,
 		}
 	}
 }
