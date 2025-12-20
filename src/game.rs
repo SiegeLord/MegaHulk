@@ -1163,15 +1163,14 @@ impl Map
 		let mut physics = Physics::new();
 		let (level, level_map, player) = spawn_level(level_name, &mut physics, &mut world, state)?;
 
-		let map_rot = {
-			let position = world.get::<&comps::Position>(player)?;
-			UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -PI / 2.) * position.rot
-		};
+		let player_position = { (*world.get::<&comps::Position>(player)?).clone() };
+		let map_rot =
+			UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -PI / 2.) * player_position.rot;
 
 		Ok(Self {
 			world: world,
 			physics: physics,
-			camera_target: comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
+			camera_target: player_position,
 			player: player,
 			accept_input: true,
 			camera: player,
@@ -1428,20 +1427,26 @@ impl Map
 				{
 					for vtx in &mut mesh.vtxs
 					{
-						for dy in -2..=2
+						let r = 2;
+						let mut visible = false;
+						for dy in -r..=r
 						{
-							for dx in -2..=2
+							for dx in -r..=r
 							{
 								let x = (vtx.u2 * w as f32 + 0.5 as f32) as i32 + dx;
 								let y = (vtx.v2 * h as f32 + 0.5 as f32) as i32 + dy;
 								let color =
 									unsafe { al_get_pixel(exploration_buffer_allegro, x, h - y) };
-								let visible = color.r > 0.5;
-								if visible
-								{
-									vtx.color = Color::from_rgb_f(1., 1., 1.);
-								}
+								visible |= color.r > 0.;
 							}
+						}
+						if visible
+						{
+							vtx.color = Color::from_rgb_f(1., 1., 1.);
+						}
+						else
+						{
+							vtx.color = Color::from_rgba_f(0., 0., 0., 0.);
 						}
 					}
 					let len = mesh.vertex_buffer.len();

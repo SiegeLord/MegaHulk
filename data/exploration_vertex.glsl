@@ -8,19 +8,27 @@ uniform sampler2D al_tex;
 
 uniform mat4 al_projview_matrix;
 
-varying vec3 uv_depth;
-varying vec3 visible2;
+varying float visible;
+
+float depth_to_linear(float depth)
+{
+    float near = 0.1;
+    float far = 10.;
+    // Convert the non-linear [0,1] depth back to linear [0,1]
+    float z = depth * 2.0 - 1.0; // Back to NDC (-1 to 1)
+    return (2.0 * near * far) / (far + near - z * (far - near)) / far;
+}
 
 float linear_to_depth(float linear)
 {
-	float near = 0.1;
-	float far = 10.;
-	return (1.0 / (linear * far) - 1.0 / near) / (1.0 / far - 1.0 / near);
+    float near = 0.1;
+    float far = 10.;
+    return (1.0 / (linear * far) - 1.0 / near) / (1.0 / far - 1.0 / near);
 }
 
 float decode_depth(vec3 v)
 {
-	return linear_to_depth(v.r + v.g / 255. + v.b / (255. * 255.));
+    return v.r + v.g / 255. + v.b / (255. * 255.);
 }
 
 void main()
@@ -31,13 +39,14 @@ void main()
    vec4 clip_pos = al_projview_matrix * al_pos;
    vec3 projected = clip_pos.xyz / clip_pos.w;
    // Back to 0..1
-   uv_depth = vec3(0.5 * projected.xy + 0.5, 0.5 * projected.z + 0.5);
+   vec3 uv_depth = vec3(0.5 * projected.xy + 0.5, 0.5 * projected.z + 0.5);
 
    float valid = float(uv_depth.x >= 0.) * float(uv_depth.x < 1.) * float(uv_depth.y >= 0.) * float(uv_depth.y < 1.) * float(clip_pos.w > 0.);
    float depth = decode_depth(texture(al_tex, uv_depth.xy).rgb);
+   float cur_depth = depth_to_linear(uv_depth.z);
 
-   visible2 = valid * vec3(uv_depth.z < depth + 1e-4);
-   //visible2 = valid * vec3(uv_depth.z);
-   //visible2 = valid * vec3(depth);
-   //visible2 = valid * vec3(uv_depth.xy, 0.);
+   visible = valid * float(abs(cur_depth - depth) < 1e-1);
+   //visible = valid * vec3(uv_depth.z);
+   //visible = valid * vec3(depth);
+   //visible = valid * vec3(uv_depth.xy, 0.);
 }
