@@ -34,6 +34,8 @@ void main()
     
     if (is_static && material == STATIC_MATERIAL)
 	dist_frac = 0.;
+    if (material == DYNAMIC_WITH_ADDITIVE_LIGHTMAP_MATERIAL)
+	dist_frac = 0.;
 
     color = dist_frac * vec4((light_color * diffuse_dot).xyz, specular_dot * 0.);
 }

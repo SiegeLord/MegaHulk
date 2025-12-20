@@ -10,6 +10,11 @@ layout(location = 1) out vec4 normal_buffer;
 layout(location = 2) out vec4 albedo_buffer;
 layout(location = 3) out vec4 light_buffer;
 
+uniform vec2 tex_size;
+uniform int num_frames;
+uniform float frame_ms;
+uniform vec2 frame_dxy;
+
 uniform sampler2D al_tex;
 uniform sampler2D lightmap;
 
@@ -21,8 +26,11 @@ uniform vec3 player_pos;
 
 void main()
 {
-    vec4 tex_color = texture(al_tex, varying_texcoord);
-    vec4 lightmap_color = texture(lightmap, varying_texcoord2);
+    float frame = int(floor(time / (frame_ms / 1000.))) % num_frames;
+    vec2 duv = frame * frame_dxy / tex_size;
+
+    vec4 tex_color = texture(al_tex, varying_texcoord + duv);
+    vec4 lightmap_color = texture(lightmap, varying_texcoord2 + duv);
     if (tex_color.a == 0.0) discard;
     position_buffer = varying_pos;
     normal_buffer = vec4(normalize(varying_normal), float(material));
@@ -30,7 +38,7 @@ void main()
     if (albedo_buffer.a == 0.0) discard;
 
     vec4 light = vec4(0.);
-    if (material == STATIC_MATERIAL || material == DYNAMIC_WITH_LIGHTMAP_MATERIAL)
+    if (material == STATIC_MATERIAL || material == DYNAMIC_WITH_LIGHTMAP_MATERIAL || material == DYNAMIC_WITH_ADDITIVE_LIGHTMAP_MATERIAL)
 	light = vec4(lightmap_color.rgb, 0.);
     else if (material == FULLBRIGHT_MATERIAL)
 	light = vec4(vec3(1.), 0.);

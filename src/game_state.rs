@@ -25,7 +25,8 @@ pub enum MaterialKind
 	Fullbright = 2,
 	DynamicWithLightmap = 3,
 	LevelMap = 4,
-	NumMaterials = 5,
+	DynamicWithAdditiveLightmap = 5,
+	NumMaterials = 6,
 }
 
 pub fn shader_replacements() -> Vec<(&'static str, &'static str)>
@@ -41,6 +42,10 @@ pub fn shader_replacements() -> Vec<(&'static str, &'static str)>
 			MaterialKind::Fullbright => ("FULLBRIGHT_MATERIAL", "2"),
 			MaterialKind::DynamicWithLightmap => ("DYNAMIC_WITH_LIGHTMAP_MATERIAL", "3"),
 			MaterialKind::LevelMap => ("LEVEL_MAP_MATERIAL", "4"),
+			MaterialKind::DynamicWithAdditiveLightmap =>
+			{
+				("DYNAMIC_WITH_ADDITIVE_LIGHTMAP_MATERIAL", "5")
+			}
 			MaterialKind::NumMaterials => unreachable!(),
 		});
 	}

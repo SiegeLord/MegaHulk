@@ -2403,7 +2403,6 @@ impl Map
 						)
 						.ok();
 				};
-			// THIS IS HORRIBLE
 			state
 				.hs
 				.core
@@ -2532,6 +2531,11 @@ impl Map
 					.hs
 					.core
 					.set_shader_uniform("base_color", &[color][..])
+					.ok();
+				state
+					.hs
+					.core
+					.set_shader_uniform("time", &[state.hs.time as f32][..])
 					.ok();
 
 				state.get_scene(&scene.scene).unwrap().draw(
