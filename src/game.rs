@@ -1456,9 +1456,14 @@ impl Map
 		}
 
 		// AI.
-		for (_, (position, controller, ai)) in self
+		for (_, (position, controller, physics, ai)) in self
 			.world
-			.query::<(&comps::Position, &mut comps::Controller, &mut comps::AI)>()
+			.query::<(
+				&comps::Position,
+				&mut comps::Controller,
+				&comps::Physics,
+				&mut comps::AI,
+			)>()
 			.iter()
 		{
 			let mut new_state = None;
@@ -1466,11 +1471,23 @@ impl Map
 			{
 				comps::AIState::Idle =>
 				{
-					if let Ok(player_position) = self.world.get::<&comps::Position>(self.player)
+					if let Some(player_position) = player_position
 					{
-						if (player_position.pos - position.pos).norm() < 5.
+						let dir = (player_position.pos - position.pos).normalize();
+						let (forward, _, _) = get_dirs(position.rot);
+						if forward.dot(&dir) > 0.
 						{
-							new_state = Some(comps::AIState::Attacking(self.player))
+							if let Some((collider_handle, range)) =
+								self.physics.ray_cast(position.pos, dir, physics.handle)
+							{
+								let collider =
+									self.physics.collider_set.get(collider_handle).unwrap();
+								if hecs::Entity::from_bits(collider.user_data as u64).unwrap()
+									== self.player && range < 5.
+								{
+									new_state = Some(comps::AIState::Attacking(self.player))
+								}
+							}
 						}
 					}
 				}
