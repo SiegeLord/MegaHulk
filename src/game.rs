@@ -1229,6 +1229,10 @@ impl Map
 				.get_action_state(game_state::Action::RotateDown);
 		if self.world.contains(self.player)
 		{
+			let mut controller = self
+				.world
+				.get::<&mut comps::Controller>(self.player)
+				.unwrap();
 			if self.show_map
 			{
 				let y_rot =
@@ -1237,13 +1241,12 @@ impl Map
 
 				self.map_rot = y_rot * self.map_rot * x_rot;
 				self.map_zoom *= (0.9_f32).powf(in_out);
+
+				controller.want_move = Vector3::zeros();
+				controller.want_rotate = Vector3::zeros();
 			}
 			else if self.accept_input
 			{
-				let mut controller = self
-					.world
-					.get::<&mut comps::Controller>(self.player)
-					.unwrap();
 				controller.want_move = Vector3::new(right_left, up_down, 0.);
 				controller.want_rotate = Vector3::new(-rot_up_down, -rot_right_left, 0.);
 

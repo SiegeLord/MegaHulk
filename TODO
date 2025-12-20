@@ -1,6 +1,5 @@
 Map
     Door exploration broken?
-    Weird motion when entering the map
 
 Make the hit spawn closer to the collision hull of the target.
 
