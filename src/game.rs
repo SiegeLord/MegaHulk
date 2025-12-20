@@ -1027,7 +1027,7 @@ fn spawn_level(
 					object.pos,
 					comps::Light {
 						color: color,
-						intensity: intensity / 50.,
+						intensity: intensity / 30.,
 						static_: true,
 					},
 					world,
@@ -2098,7 +2098,7 @@ impl Map
 						{
 							let dir = (dest_pos - src_pos).normalize();
 							let rot = UnitQuaternion::face_towards(&dir, &Vector3::y());
-							spawn_hit(src_pos, rot, &mut self.world, state)?;
+							spawn_hit(src_pos + 0.3 * dir, rot, &mut self.world, state)?;
 						}
 					}
 					comps::Effect::SpawnExplosion =>

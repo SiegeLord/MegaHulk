@@ -29,9 +29,9 @@ void main()
     albedo_buffer = base_color * varying_color * tex_color;
     if (albedo_buffer.a == 0.0) discard;
 
-    vec4 light = vec4(vec3(0.05), 0.);
+    vec4 light = vec4(0.);
     if (material == STATIC_MATERIAL || material == DYNAMIC_WITH_LIGHTMAP_MATERIAL)
-	light += vec4(lightmap_color.rgb, 0.);
+	light = vec4(lightmap_color.rgb, 0.);
     else if (material == FULLBRIGHT_MATERIAL)
 	light = vec4(vec3(1.), 0.);
     else if (material == LEVEL_MAP_MATERIAL) {
