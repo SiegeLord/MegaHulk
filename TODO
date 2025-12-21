@@ -1,8 +1,18 @@
 HUD
+    - Centre graphic
+    - Gift graphic
+    - Ammo stuff
+    - Level name on map
+    - Keys
+    - Damage highlights
 
 Weapons
 
 Fix player collision
+
+Death + respawns
+
+
 
 Map
     Still some leakage through closed doors...

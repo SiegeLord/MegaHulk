@@ -399,7 +399,7 @@ impl KeyKind
 	}
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ItemKind
 {
 	Energy,
@@ -407,6 +407,7 @@ pub enum ItemKind
 	{
 		kind: KeyKind,
 	},
+	Gift,
 }
 
 impl ItemKind
@@ -423,6 +424,7 @@ impl ItemKind
 			"yellow_key" => Some(Self::Key {
 				kind: KeyKind::Yellow,
 			}),
+			"gift" => Some(Self::Gift),
 			_ => None,
 		}
 	}
@@ -685,6 +687,7 @@ impl Stats
 pub struct Inventory
 {
 	pub keys: HashSet<KeyKind>,
+	pub num_gifts: i32,
 }
 
 impl Inventory
@@ -693,6 +696,7 @@ impl Inventory
 	{
 		Self {
 			keys: HashSet::new(),
+			num_gifts: 0,
 		}
 	}
 }

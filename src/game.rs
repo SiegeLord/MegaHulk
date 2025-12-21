@@ -587,12 +587,13 @@ pub fn spawn_item(
 	world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let (scene_name, scene_color, color, effects) = match kind
+	let (scene_name, scene_color, light_color, map_scene, effects) = match kind
 	{
 		comps::ItemKind::Energy => (
 			"data/energy.glb",
 			Color::from_rgb_f(1., 1., 1.),
-			Color::from_rgb_f(0., 0., 1.),
+			Some(Color::from_rgb_f(0., 0., 1.)),
+			None,
 			vec![
 				comps::Effect::SpawnExplosion {
 					kind: comps::ExplosionKind::Energy,
@@ -603,7 +604,20 @@ pub fn spawn_item(
 		comps::ItemKind::Key { kind: key_kind } => (
 			"data/key.glb",
 			key_kind.color(),
-			key_kind.color(),
+			Some(key_kind.color()),
+			None,
+			vec![
+				comps::Effect::SpawnExplosion {
+					kind: comps::ExplosionKind::Energy,
+				},
+				comps::Effect::PickupItem { kind: kind },
+			],
+		),
+		comps::ItemKind::Gift => (
+			"data/gift.glb",
+			Color::from_rgb_f(1., 1., 1.),
+			None,
+			Some(("data/gift_map.glb", Color::from_rgb_f(1., 0., 1.))),
 			vec![
 				comps::Effect::SpawnExplosion {
 					kind: comps::ExplosionKind::Energy,
@@ -622,13 +636,27 @@ pub fn spawn_item(
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		scene,
-		comps::Light {
-			color: color,
-			intensity: 100.,
-			static_: false,
-		},
 		comps::OnCollideEffects::new(&effects),
 	));
+	if let Some((map_scene_name, map_scene_color)) = map_scene
+	{
+		game_state::cache_scene(state, map_scene_name)?;
+		let mut map_scene = comps::MapScene::new(map_scene_name);
+		map_scene.color = map_scene_color;
+		map_scene.explored = true;
+		world.insert_one(entity, map_scene)?;
+	}
+	if let Some(light_color) = light_color
+	{
+		world.insert_one(
+			entity,
+			comps::Light {
+				color: light_color,
+				intensity: 100.,
+				static_: false,
+			},
+		)?;
+	}
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
 		.angular_damping(10.)
@@ -640,10 +668,7 @@ pub fn spawn_item(
 		.mass(0.1)
 		.friction(0.)
 		.user_data(entity.to_bits().get() as u128)
-		.collision_groups(InteractionGroups::new(
-			BIG_GROUP,
-			PLAYER_GROUP | BIG_GROUP | GRIPPER_GROUP,
-		))
+		.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP))
 		.active_events(ActiveEvents::COLLISION_EVENTS)
 		.build();
 	let body_handle = physics.rigid_body_set.insert(rigid_body);
@@ -1098,10 +1123,18 @@ impl LevelMap
 	}
 }
 
+struct LevelProperties
+{
+	level: hecs::Entity,
+	level_map: LevelMap,
+	player: hecs::Entity,
+	num_gifts: i32,
+}
+
 fn spawn_level(
 	scene_name: &str, physics: &mut Physics, world: &mut hecs::World,
 	state: &mut game_state::GameState,
-) -> Result<(hecs::Entity, LevelMap, hecs::Entity)>
+) -> Result<LevelProperties>
 {
 	game_state::cache_scene(state, scene_name)?;
 
@@ -1170,6 +1203,7 @@ fn spawn_level(
 			) -> Result<hecs::Entity>,
 		>,
 	> = vec![];
+	let mut num_gifts = 0;
 	for object in &level_scene.objects
 	{
 		let pos = object.pos.clone();
@@ -1254,6 +1288,10 @@ fn spawn_level(
 							kind_str, object.name
 						)
 					})?;
+					if kind == comps::ItemKind::Gift
+					{
+						num_gifts += 1;
+					}
 					spawn_fns.push(Box::new(
 						move |physics, world, state| -> Result<hecs::Entity> {
 							spawn_item(pos, Vector3::zeros(), kind, physics, world, state)
@@ -1295,7 +1333,12 @@ fn spawn_level(
 		spawn_fn(physics, world, state)?;
 	}
 
-	Ok((entity, level_map, player))
+	Ok(LevelProperties {
+		level: entity,
+		level_map: level_map,
+		player: player,
+		num_gifts: num_gifts,
+	})
 }
 
 fn set_connector_position(
@@ -1334,6 +1377,7 @@ struct Map
 	map_rot: UnitQuaternion<f32>,
 	map_zoom: f32,
 	level_map: LevelMap,
+	num_gifts: i32,
 }
 
 impl Map
@@ -1347,7 +1391,12 @@ impl Map
 		state.cache_bitmap("data/map_texture.png")?;
 
 		let mut physics = Physics::new();
-		let (level, level_map, player) = spawn_level(level_name, &mut physics, &mut world, state)?;
+		let LevelProperties {
+			level,
+			level_map,
+			player,
+			num_gifts,
+		} = spawn_level(level_name, &mut physics, &mut world, state)?;
 
 		let player_position = { (*world.get::<&comps::Position>(player)?).clone() };
 		let map_rot =
@@ -1367,6 +1416,7 @@ impl Map
 			map_rot: map_rot,
 			map_zoom: 40.,
 			level_map: level_map,
+			num_gifts: num_gifts,
 		})
 	}
 
@@ -2599,17 +2649,7 @@ impl Map
 					{
 						if let Some(other_id) = other_id
 						{
-							// HACK: Could we have gotten away with some collision proxy component?
-							let mut do_pickup = other_id == self.player;
-							if !do_pickup
-							{
-								if let Ok(gripper) = self.world.get::<&comps::Gripper>(other_id)
-								{
-									do_pickup = gripper.parent == self.player;
-								}
-							}
-
-							if do_pickup
+							if other_id == self.player
 							{
 								match kind
 								{
@@ -2628,6 +2668,14 @@ impl Map
 											self.world.get::<&mut comps::Inventory>(self.player)
 										{
 											inventory.keys.insert(kind);
+										}
+									}
+									comps::ItemKind::Gift =>
+									{
+										if let Ok(mut inventory) =
+											self.world.get::<&mut comps::Inventory>(self.player)
+										{
+											inventory.num_gifts += 1;
 										}
 									}
 								}
@@ -3182,6 +3230,7 @@ impl Map
 		{
 			let health = self.world.get::<&comps::Health>(self.player).unwrap();
 			let grippers = self.world.get::<&comps::Grippers>(self.player).unwrap();
+			let inventory = self.world.get::<&comps::Inventory>(self.player).unwrap();
 			if !health.dead
 			{
 				let bw = state.hs.buffer_width();
@@ -3253,12 +3302,21 @@ impl Map
 
 				let power_level = grippers.power_level;
 				state.hs.core.draw_text(
-					state.hs.ui_font(),
+					state.hud_font(),
 					Color::from_rgb_f(0.8, 0.8, 0.2),
 					cx + 20.,
 					bh - 64. - lh / 2.,
 					FontAlign::Left,
 					&format!("{power_level:.1}x"),
+				);
+
+				state.hs.core.draw_text(
+					state.hud_font(),
+					Color::from_rgb_f(0.6, 0.8, 0.9),
+					16.,
+					16.,
+					FontAlign::Left,
+					&format!("{:>2} / {:}", inventory.num_gifts, self.num_gifts),
 				);
 			}
 		}
