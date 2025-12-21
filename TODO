@@ -1,5 +1,13 @@
+HUD
+
+Keys
+
+Weapons
+
+Fix player collision
+
 Map
-    Still some leakage through closed doors... maybe fixed?
+    Still some leakage through closed doors...
 
 Cleanup
     I hate how the vertex access is done.

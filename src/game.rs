@@ -298,7 +298,9 @@ pub fn spawn_robot(
 		comps::Health::new(35.),
 		comps::AI::new(),
 		comps::Weapon::new(Vector3::new(0., 0., -1.)),
-		comps::OnDeathEffects::new(&[comps::Effect::SpawnExplosion]),
+		comps::OnDeathEffects::new(&[comps::Effect::SpawnExplosion {
+			kind: comps::ExplosionKind::Big,
+		}]),
 	));
 
 	let rigid_body = RigidBodyBuilder::dynamic()
@@ -338,15 +340,17 @@ pub fn spawn_reactor(
 
 	let mut health = comps::Health::new(35.);
 	health.remove_on_death = false;
+	health.death_effects = vec![
+		comps::Effect::ExplosionSpawner {
+			kind: comps::ExplosionKind::Small,
+		},
+		comps::Effect::OpenExit,
+	];
 
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Scene::new(scene_name),
 		health,
-		comps::OnDeathEffects::new(&[
-			comps::Effect::SpawnExplosionSpawner,
-			comps::Effect::OpenExit,
-		]),
 	));
 
 	let rigid_body = RigidBodyBuilder::fixed()
@@ -400,15 +404,6 @@ pub fn spawn_player_exit_track(
 	Ok(entity)
 }
 
-pub fn spawn_explosion_spawner(pos: Point3<f32>, world: &mut hecs::World) -> Result<hecs::Entity>
-{
-	let entity = world.spawn((
-		comps::Position::new(pos, UnitQuaternion::identity()),
-		comps::ExplosionSpawner::new(),
-	));
-	Ok(entity)
-}
-
 pub fn spawn_exit_explosions(
 	scene_name: &str, obj_name: &str, world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
@@ -429,7 +424,7 @@ pub fn spawn_exit_explosions(
 			obj_idx as i32,
 			scene::AnimationState::new("Play", true),
 		),
-		comps::ExplosionSpawner::new(),
+		comps::ExplosionSpawner::new(comps::ExplosionKind::Big),
 	));
 	Ok(entity)
 }
@@ -455,6 +450,47 @@ pub fn spawn_animated_target(
 			scene::AnimationState::new("Play", true),
 		),
 	));
+	Ok(entity)
+}
+
+pub fn spawn_death_camera(
+	pos: Point3<f32>, target: hecs::Entity, physics: &mut Physics, world: &mut hecs::World,
+) -> Result<hecs::Entity>
+{
+	let entity = world.spawn((
+		comps::Position::new(pos, UnitQuaternion::identity()),
+		comps::FaceTowards::new(target),
+	));
+	let rigid_body = RigidBodyBuilder::dynamic()
+		.translation(pos.coords)
+		.linear_damping(2.)
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let collider = ColliderBuilder::ball(0.5)
+		.restitution(0.1)
+		.mass(0.1)
+		.friction(0.)
+		.user_data(entity.to_bits().get() as u128)
+		.collision_groups(InteractionGroups::new(
+			SMALL_GROUP,
+			PLAYER_GROUP | BIG_GROUP,
+		))
+		.build();
+	let body_handle = physics.rigid_body_set.insert(rigid_body);
+	physics
+		.collider_set
+		.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
+	let mut camera_physics = comps::Physics::new(body_handle);
+	let vel = 2.
+		* Vector3::<f64>::from_row_slice(&rand_distr::UnitSphere.sample(&mut rand::rng()))
+			.cast::<f32>();
+	physics
+		.rigid_body_set
+		.get_mut(body_handle)
+		.unwrap()
+		.apply_impulse(vel, true);
+	camera_physics.copy_rot = false;
+	world.insert_one(entity, camera_physics)?;
 	Ok(entity)
 }
 
@@ -546,10 +582,25 @@ pub fn spawn_player(
 	game_state::cache_scene(state, scene_name)?;
 	let mut map_scene = comps::MapScene::new(scene_name);
 	map_scene.explored = true;
+
+	let mut health = comps::Health::new(100.);
+	health.remove_on_death = false;
+	health.death_effects = vec![
+		comps::Effect::SpawnDeathCamera,
+		comps::Effect::ExplosionSpawner {
+			kind: comps::ExplosionKind::Small,
+		},
+		comps::Effect::DelayedDeath { delay: 3. },
+	];
+
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Controller::new(),
 		comps::Scene::new(scene_name),
+		comps::OnDeathEffects::new(&[comps::Effect::SpawnExplosion {
+			kind: comps::ExplosionKind::Big,
+		}]),
+		health,
 		map_scene,
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
@@ -689,15 +740,22 @@ pub fn spawn_hit(
 			intensity: 500.,
 			static_: false,
 		},
-		comps::ExplosionScaling::new(state.hs.time() + 0.2),
+		comps::ExplosionScaling::new(4.),
+		comps::TimeToDie::new(state.hs.time() + 0.2),
 	));
 	Ok(entity)
 }
 
 pub fn spawn_explosion(
-	pos: Point3<f32>, world: &mut hecs::World, state: &mut game_state::GameState,
+	pos: Point3<f32>, kind: comps::ExplosionKind, world: &mut hecs::World,
+	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
+	let scale = match kind
+	{
+		comps::ExplosionKind::Small => 0.1,
+		comps::ExplosionKind::Big => 0.5,
+	};
 	let scene_name = "data/explosion.glb";
 	let mut scene = comps::AdditiveScene::new(scene_name);
 	scene.color = Color::from_rgb_f(1.0, 0.5, 0.);
@@ -705,12 +763,13 @@ pub fn spawn_explosion(
 	let dir = Vector3::from_row_slice(&rand_distr::UnitSphere.sample(&mut rand::rng()));
 	let rot = UnitQuaternion::face_towards(&dir, &Vector3::y());
 	let entity = world.spawn((
-		comps::Position::new_scaled(pos, rot, Vector3::from_element(0.5)),
+		comps::Position::new_scaled(pos, rot, Vector3::from_element(scale)),
 		scene,
-		comps::ExplosionScaling::new(state.hs.time() + 0.2),
+		comps::ExplosionScaling::new(4.),
+		comps::TimeToDie::new(state.hs.time() + 0.2 * scale as f64),
 		comps::Light {
 			color: Color::from_rgb_f(1., 0.5, 0.),
-			intensity: 500.,
+			intensity: scale * 500.,
 			static_: false,
 		},
 	));
@@ -1404,7 +1463,7 @@ impl Map
 			state.controls.clear_action_state(game_state::Action::Pause);
 			state.hs.paused = !state.hs.paused;
 		}
-		if state.controls.get_action_state(game_state::Action::Map) > 0.5
+		if state.controls.get_action_state(game_state::Action::Map) > 0.5 && self.accept_input
 		{
 			state.controls.clear_action_state(game_state::Action::Map);
 			self.show_map = !self.show_map;
@@ -1533,16 +1592,12 @@ impl Map
 		}
 
 		// ExplosionScaling.
-		for (id, (position, explosion_scaling)) in self
+		for (_, (position, explosion_scaling)) in self
 			.world
 			.query::<(&mut comps::Position, &comps::ExplosionScaling)>()
 			.iter()
 		{
-			if state.hs.time() > explosion_scaling.time_to_die
-			{
-				to_die.push(id);
-			}
-			position.scale += Vector3::from_element(4. * DT);
+			position.scale += Vector3::from_element(explosion_scaling.scale_rate * DT);
 		}
 
 		// Friction + force resetting.
@@ -1665,11 +1720,11 @@ impl Map
 
 						let body = self.physics.rigid_body_set.get_mut(body_handle).unwrap();
 						let gripper_pos = *body.translation();
-						if let Some(parent_physics) = self
+						let mut parent_query = self
 							.world
 							.query_one::<&mut comps::Physics>(gripper.parent)
-							.unwrap()
-							.get()
+							.ok();
+						if let Some(parent_physics) = parent_query.as_mut().and_then(|q| q.get())
 						{
 							if other_id == self.level
 							{
@@ -1741,6 +1796,15 @@ impl Map
 						}
 					}
 				}
+			}
+		}
+
+		// Gripper death.
+		for (id, gripper) in self.world.query::<&comps::Gripper>().iter()
+		{
+			if !self.world.contains(gripper.parent)
+			{
+				to_die.push(id);
 			}
 		}
 
@@ -1847,8 +1911,35 @@ impl Map
 		{
 			let body = &self.physics.rigid_body_set[physics.handle];
 			position.pos = Point3::from(*body.translation());
-			position.rot = *body.rotation();
+			if physics.copy_rot
+			{
+				position.rot = *body.rotation();
+			}
 			physics.old_vel = *body.linvel();
+		}
+
+		//  FaceTowards.
+		let mut new_rot = vec![];
+		for (id, (position, face_towards)) in self
+			.world
+			.query::<(&comps::Position, &mut comps::FaceTowards)>()
+			.iter()
+		{
+			if let Ok(target_position) = self.world.get::<&comps::Position>(face_towards.target)
+			{
+				face_towards.last_pos = target_position.pos;
+			}
+			new_rot.push((
+				id,
+				UnitQuaternion::face_towards(
+					&-(face_towards.last_pos - position.pos),
+					&Vector3::y_axis(),
+				),
+			));
+		}
+		for (id, new_rot) in new_rot
+		{
+			self.world.get::<&mut comps::Position>(id).unwrap().rot = new_rot;
 		}
 
 		// Door upkeep.
@@ -2015,8 +2106,9 @@ impl Map
 						rng.random_range(-1.0..=1.0),
 						rng.random_range(-1.0..=1.0),
 					);
+				let kind = explosion_spawner.kind;
 				spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
-					spawn_explosion(pos, &mut map.world, state)
+					spawn_explosion(pos, kind, &mut map.world, state)
 				}));
 				explosion_spawner.time_for_explosion = state.hs.time + 0.1;
 			}
@@ -2026,6 +2118,46 @@ impl Map
 		for spawn_fn in spawn_fns
 		{
 			spawn_fn(self, state)?;
+		}
+
+		// Health.
+		for (id, health) in self.world.query::<&mut comps::Health>().iter()
+		{
+			if health.health <= 0.0 && !health.dead
+			{
+				health.dead = true;
+				for effect in &health.death_effects
+				{
+					effects.push((effect.clone(), id, None));
+				}
+				if health.remove_on_death
+				{
+					to_die.push(id);
+					if let Ok(on_death_effects) = self.world.get::<&comps::OnDeathEffects>(id)
+					{
+						for effect in &on_death_effects.effects
+						{
+							effects.push((effect.clone(), id, None));
+						}
+					}
+				}
+			}
+		}
+		// TimeToDie.
+		for (id, time_to_die) in self.world.query::<&mut comps::TimeToDie>().iter()
+		{
+			if state.hs.time > time_to_die.time_to_die && !time_to_die.dead
+			{
+				time_to_die.dead = true;
+				to_die.push(id);
+				if let Ok(on_death_effects) = self.world.get::<&comps::OnDeathEffects>(id)
+				{
+					for effect in &on_death_effects.effects
+					{
+						effects.push((effect.clone(), id, None));
+					}
+				}
+			}
 		}
 
 		// Effects.
@@ -2101,7 +2233,7 @@ impl Map
 							spawn_hit(src_pos + 0.3 * dir, rot, &mut self.world, state)?;
 						}
 					}
-					comps::Effect::SpawnExplosion =>
+					comps::Effect::SpawnExplosion { kind } =>
 					{
 						let mut src_pos = None;
 						if let Ok(position) = self.world.get::<&comps::Position>(id)
@@ -2110,7 +2242,7 @@ impl Map
 						}
 						if let Some(src_pos) = src_pos
 						{
-							spawn_explosion(src_pos, &mut self.world, state)?;
+							spawn_explosion(src_pos, kind, &mut self.world, state)?;
 						}
 					}
 					comps::Effect::Open =>
@@ -2208,40 +2340,37 @@ impl Map
 							}
 						}
 					}
-					comps::Effect::SpawnExplosionSpawner =>
+					comps::Effect::ExplosionSpawner { kind } =>
 					{
+						self.world
+							.insert_one(id, comps::ExplosionSpawner::new(kind))?;
+					}
+					comps::Effect::SpawnDeathCamera =>
+					{
+						self.accept_input = false;
 						let mut src_pos = None;
 						if let Ok(position) = self.world.get::<&comps::Position>(id)
 						{
-							src_pos = Some(position.pos);
+							src_pos = Some(position.pos.clone());
 						}
 						if let Some(src_pos) = src_pos
 						{
-							spawn_explosion_spawner(src_pos, &mut self.world)?;
+							self.camera = spawn_death_camera(
+								src_pos,
+								id,
+								&mut self.physics,
+								&mut self.world,
+							)?;
 						}
+					}
+					comps::Effect::DelayedDeath { delay } =>
+					{
+						self.world
+							.insert_one(id, comps::TimeToDie::new(state.hs.time + delay))?;
 					}
 				}
 			}
 
-			// Health.
-			for (id, health) in self.world.query::<&mut comps::Health>().iter()
-			{
-				if health.health <= 0.0 && !health.dead
-				{
-					health.dead = true;
-					if health.remove_on_death
-					{
-						to_die.push(id);
-					}
-					if let Ok(on_death_effects) = self.world.get::<&comps::OnDeathEffects>(id)
-					{
-						for effect in &on_death_effects.effects
-						{
-							new_effects.push((effect.clone(), id, None));
-						}
-					}
-				}
-			}
 			effects = new_effects;
 		}
 
@@ -2250,6 +2379,7 @@ impl Map
 		to_die.dedup();
 		for id in to_die.drain(..)
 		{
+			//println!("Dead: {:?}", id);
 			if let Ok(physics) = self.world.get::<&comps::Physics>(id)
 			{
 				self.physics.rigid_body_set.remove(
@@ -2731,6 +2861,30 @@ impl Map
 			.core
 			.use_projection_transform(&utils::mat4_to_transform(ortho_mat));
 		state.hs.core.use_transform(&Transform::identity());
+
+		// HUD
+		if !self.show_map && self.world.contains(self.player) && self.accept_input
+		{
+			let health = self.world.get::<&comps::Health>(self.player).unwrap();
+			if !health.dead
+			{
+				let bw = state.hs.buffer_width();
+				let bh = state.hs.buffer_height();
+				let cx = bw / 2.;
+				let _cy = bh / 2.;
+
+				let delta_theta = 2. / 3. * PI * health.health / health.max_health;
+				state.hs.prim.draw_arc(
+					cx - 64.,
+					bh - 64.,
+					30.,
+					2. / 3. * PI,
+					delta_theta,
+					Color::from_rgb_f(0.8, 0.2, 0.2),
+					8.,
+				);
+			}
+		}
 		// state
 		// 	.hs
 		// 	.core

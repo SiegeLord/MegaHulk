@@ -146,7 +146,9 @@ impl AdditiveScene
 pub struct Physics
 {
 	pub handle: rapier3d::dynamics::RigidBodyHandle,
+	// Before collisions and such.
 	pub old_vel: Vector3<f32>,
+	pub copy_rot: bool,
 }
 
 impl Physics
@@ -156,6 +158,7 @@ impl Physics
 		Self {
 			handle,
 			old_vel: Vector3::zeros(),
+			copy_rot: true,
 		}
 	}
 }
@@ -288,6 +291,7 @@ pub struct Health
 	pub max_health: f32,
 	pub dead: bool,
 	pub remove_on_death: bool,
+	pub death_effects: Vec<Effect>,
 }
 
 impl Health
@@ -299,6 +303,7 @@ impl Health
 			max_health: max_health,
 			dead: false,
 			remove_on_death: true,
+			death_effects: vec![],
 		}
 	}
 }
@@ -323,6 +328,13 @@ impl Weapon
 	}
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum ExplosionKind
+{
+	Small,
+	Big,
+}
+
 #[derive(Debug, Clone)]
 pub enum Effect
 {
@@ -337,11 +349,22 @@ pub enum Effect
 		old_vel: Vector3<f32>,
 	},
 	SpawnHit,
-	SpawnExplosion,
+	SpawnExplosion
+	{
+		kind: ExplosionKind,
+	},
 	Open,
 	StartExitAnimation,
 	OpenExit,
-	SpawnExplosionSpawner,
+	ExplosionSpawner
+	{
+		kind: ExplosionKind,
+	},
+	SpawnDeathCamera,
+	DelayedDeath
+	{
+		delay: f64,
+	},
 }
 
 #[derive(Debug, Clone)]
@@ -379,15 +402,15 @@ impl OnDeathEffects
 #[derive(Debug, Clone)]
 pub struct ExplosionScaling
 {
-	pub time_to_die: f64,
+	pub scale_rate: f32,
 }
 
 impl ExplosionScaling
 {
-	pub fn new(time_to_die: f64) -> Self
+	pub fn new(scale_rate: f32) -> Self
 	{
 		Self {
-			time_to_die: time_to_die,
+			scale_rate: scale_rate,
 		}
 	}
 }
@@ -453,14 +476,52 @@ pub struct PositionCopier
 pub struct ExplosionSpawner
 {
 	pub time_for_explosion: f64,
+	pub kind: ExplosionKind,
 }
 
 impl ExplosionSpawner
 {
-	pub fn new() -> Self
+	pub fn new(kind: ExplosionKind) -> Self
 	{
 		Self {
 			time_for_explosion: 0.,
+			kind: kind,
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct FaceTowards
+{
+	pub target: hecs::Entity,
+	pub last_pos: Point3<f32>,
+}
+
+impl FaceTowards
+{
+	pub fn new(target: hecs::Entity) -> Self
+	{
+		Self {
+			target: target,
+			last_pos: Point3::origin(),
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct TimeToDie
+{
+	pub time_to_die: f64,
+	pub dead: bool,
+}
+
+impl TimeToDie
+{
+	pub fn new(time_to_die: f64) -> Self
+	{
+		Self {
+			time_to_die: time_to_die,
+			dead: false,
 		}
 	}
 }
