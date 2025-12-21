@@ -4,11 +4,11 @@ in vec2 varying_texcoord;
 out vec4 color;
 
 uniform sampler2D al_tex;
-uniform bool al_usetex;
+uniform bool al_use_tex;
 
 void main()
 {
-	if (al_usetex)
+	if (al_use_tex)
 	{
 		color = varying_color * texture2D(al_tex, varying_texcoord);
 	}

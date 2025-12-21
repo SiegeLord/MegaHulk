@@ -73,6 +73,7 @@ pub enum Action
 	RotateDown,
 	GripLeft,
 	GripRight,
+	Enrage,
 	Pause,
 	Map,
 	ZoomIn,
@@ -95,6 +96,7 @@ impl controls::Action for Action
 			Action::RotateDown => "Rotate Down",
 			Action::GripLeft => "Grip Left",
 			Action::GripRight => "Grip Right",
+			Action::Enrage => "Enrage",
 			Action::Pause => "Pause",
 			Action::Map => "Map",
 			Action::ZoomIn => "Zoom In",
@@ -137,6 +139,10 @@ pub fn new_game_controls() -> controls::Controls<Action>
 	action_to_inputs.insert(
 		Action::GripRight,
 		[Some(controls::Input::MouseButton(2)), None],
+	);
+	action_to_inputs.insert(
+		Action::Enrage,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::Space)), None],
 	);
 
 	action_to_inputs.insert(

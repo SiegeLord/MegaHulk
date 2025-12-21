@@ -171,6 +171,7 @@ pub struct Controller
 	pub want_gripper: [bool; 2],
 	pub want_fire: bool,
 	pub force_attach: bool,
+	pub want_enrage: bool,
 }
 
 impl Controller
@@ -183,6 +184,7 @@ impl Controller
 			want_gripper: [false, false],
 			want_fire: false,
 			force_attach: false,
+			want_enrage: false,
 		}
 	}
 }
@@ -227,13 +229,19 @@ impl Gripper
 pub struct Grippers
 {
 	pub grippers: [hecs::Entity; 2],
+	pub power_level: f32,
+	pub last_kill_time: f64,
 }
 
 impl Grippers
 {
 	pub fn new(grippers: [hecs::Entity; 2]) -> Self
 	{
-		Self { grippers: grippers }
+		Self {
+			power_level: 1.,
+			grippers: grippers,
+			last_kill_time: -10.,
+		}
 	}
 }
 
@@ -292,6 +300,7 @@ pub struct Health
 	pub dead: bool,
 	pub remove_on_death: bool,
 	pub death_effects: Vec<Effect>,
+	pub damaged_by: Option<hecs::Entity>,
 }
 
 impl Health
@@ -304,6 +313,7 @@ impl Health
 			dead: false,
 			remove_on_death: true,
 			death_effects: vec![],
+			damaged_by: None,
 		}
 	}
 }
@@ -523,5 +533,56 @@ impl TimeToDie
 			time_to_die: time_to_die,
 			dead: false,
 		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct StatValues
+{
+	pub speed: f32,
+	pub rot_speed: f32,
+}
+
+impl StatValues
+{
+	pub fn new_player() -> Self
+	{
+		Self {
+			speed: 16.,
+			rot_speed: 4.,
+		}
+	}
+
+	pub fn new_robot() -> Self
+	{
+		Self {
+			speed: 16.,
+			rot_speed: 3.,
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct Stats
+{
+	pub base: StatValues,
+	pub cur: StatValues,
+}
+
+impl Stats
+{
+	pub fn new(values: StatValues) -> Self
+	{
+		Self {
+			base: values.clone(),
+			cur: values,
+		}
+	}
+
+	pub fn update(&mut self, power_level: f32)
+	{
+		self.cur = self.base.clone();
+		self.cur.speed *= power_level;
+		//self.cur.rot_speed *= power_level;
 	}
 }

@@ -42,6 +42,8 @@ const GRIPPER_GROUP: Group = Group::GROUP_2;
 const BIG_GROUP: Group = Group::GROUP_3;
 const SMALL_GROUP: Group = Group::GROUP_4;
 
+const POWER_LEVEL_TIME: f64 = 10.0;
+
 pub struct PhysicsEventHandler
 {
 	collision_events: RwLock<Vec<(CollisionEvent, Option<ContactPair>)>>,
@@ -298,6 +300,7 @@ pub fn spawn_robot(
 		comps::Health::new(35.),
 		comps::AI::new(),
 		comps::Weapon::new(Vector3::new(0., 0., -1.)),
+		comps::Stats::new(comps::StatValues::new_robot()),
 		comps::OnDeathEffects::new(&[comps::Effect::SpawnExplosion {
 			kind: comps::ExplosionKind::Big,
 		}]),
@@ -597,6 +600,7 @@ pub fn spawn_player(
 		comps::Position::new(pos, rot),
 		comps::Controller::new(),
 		comps::Scene::new(scene_name),
+		comps::Stats::new(comps::StatValues::new_player()),
 		comps::OnDeathEffects::new(&[comps::Effect::SpawnExplosion {
 			kind: comps::ExplosionKind::Big,
 		}]),
@@ -607,7 +611,7 @@ pub fn spawn_player(
 		.translation(pos.coords)
 		.rotation(rot.scaled_axis())
 		.angular_damping(10.)
-		.linear_damping(5.)
+		.linear_damping(3.)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
 	let collider = ColliderBuilder::ball(0.5)
@@ -1275,6 +1279,11 @@ impl Map
 			- state
 				.controls
 				.get_action_state(game_state::Action::RotateDown);
+		let want_enrage = state.controls.get_action_state(game_state::Action::Enrage) > 0.5;
+		state
+			.controls
+			.clear_action_state(game_state::Action::Enrage);
+
 		let mut player_position = None;
 		if self.world.contains(self.player)
 		{
@@ -1303,6 +1312,7 @@ impl Map
 			{
 				controller.want_move = Vector3::new(right_left, up_down, 0.);
 				controller.want_rotate = Vector3::new(-rot_up_down, -rot_right_left, 0.);
+				controller.want_enrage = want_enrage;
 
 				for (idx, action) in [game_state::Action::GripLeft, game_state::Action::GripRight]
 					.iter()
@@ -1618,9 +1628,9 @@ impl Map
 		}
 
 		// Movement.
-		for (_, (controller, physics)) in self
+		for (_, (controller, stats, physics)) in self
 			.world
-			.query::<(&mut comps::Controller, &comps::Physics)>()
+			.query::<(&mut comps::Controller, &comps::Stats, &comps::Physics)>()
 			.iter()
 		{
 			let body = self.physics.rigid_body_set.get_mut(physics.handle).unwrap();
@@ -1629,14 +1639,15 @@ impl Map
 			let (forward, right, up) = get_dirs(rot);
 
 			body.add_force(
-				16. * (controller.want_move.x * right
-					+ controller.want_move.y * up
-					+ controller.want_move.z * forward),
+				stats.cur.speed
+					* (controller.want_move.x * right
+						+ controller.want_move.y * up
+						+ controller.want_move.z * forward),
 				true,
 			);
 			//body.apply_torque_impulse(DT * (rot * controller.want_rotate), true);
 			body.set_angvel(
-				DT * 3. * (rot * controller.want_rotate) + body.angvel(),
+				DT * stats.cur.rot_speed * (rot * controller.want_rotate) + body.angvel(),
 				true,
 			);
 		}
@@ -1722,9 +1733,10 @@ impl Map
 						let gripper_pos = *body.translation();
 						let mut parent_query = self
 							.world
-							.query_one::<&mut comps::Physics>(gripper.parent)
+							.query_one::<(&comps::Grippers, &mut comps::Physics)>(gripper.parent)
 							.ok();
-						if let Some(parent_physics) = parent_query.as_mut().and_then(|q| q.get())
+						if let Some((grippers, parent_physics)) =
+							parent_query.as_mut().and_then(|q| q.get())
 						{
 							if other_id == self.level
 							{
@@ -1748,9 +1760,10 @@ impl Map
 								);
 								gripper.attach_joint = Some(joint_handle);
 
-								let joint = SpringJointBuilder::new(0.1, 30., 10.)
-									.local_anchor1(Point3::origin())
-									.local_anchor2(Point3::origin());
+								let joint =
+									SpringJointBuilder::new(0.1, 30. * grippers.power_level, 10.)
+										.local_anchor1(Point3::origin())
+										.local_anchor2(Point3::origin());
 								let joint_handle = self.physics.impulse_joint_set.insert(
 									body_handle,
 									parent_physics.handle,
@@ -1808,6 +1821,15 @@ impl Map
 			}
 		}
 
+		// Stats.
+		for (_, (stats, grippers)) in self
+			.world
+			.query::<(&mut comps::Stats, &comps::Grippers)>()
+			.iter()
+		{
+			stats.update(grippers.power_level);
+		}
+
 		// Grippers.
 		// Do these after physics so we can compute the velocity correctly.
 		let mut want_grip = vec![];
@@ -1820,17 +1842,36 @@ impl Map
 			)>()
 			.iter()
 		{
+			if let Ok(mut health) = self.world.get::<&mut comps::Health>(id)
+			{
+				if controller.want_enrage
+				{
+					health.health -= 10.;
+					grippers.last_kill_time = state.hs.time;
+					grippers.power_level += 0.1;
+				}
+			}
 			for (want_gripper, gripper_id) in
 				itertools::izip!(&controller.want_gripper, &mut grippers.grippers,)
 			{
 				if *want_gripper || controller.force_attach
 				{
-					want_grip.push((id, *position, *gripper_id, controller.force_attach));
+					want_grip.push((
+						id,
+						*position,
+						*gripper_id,
+						grippers.power_level,
+						controller.force_attach,
+					));
 				}
+			}
+			if state.hs.time > grippers.last_kill_time + POWER_LEVEL_TIME
+			{
+				grippers.power_level = 1.0;
 			}
 		}
 
-		for (id, parent_position, gripper_id, force_attach) in want_grip
+		for (id, parent_position, gripper_id, power_level, force_attach) in want_grip
 		{
 			let mut attach = false;
 			let gripper_offset;
@@ -1853,7 +1894,7 @@ impl Map
 								.rigid_body_set
 								.get_mut(gripper_physics.handle)
 								.unwrap();
-							gripper_body.apply_impulse(forward, true);
+							gripper_body.apply_impulse(power_level * forward, true);
 							for collider_handle in gripper_body.colliders()
 							{
 								let collider =
@@ -2141,8 +2182,16 @@ impl Map
 						}
 					}
 				}
+				if let Some(mut grippers) = health
+					.damaged_by
+					.and_then(|other_id| self.world.get::<&mut comps::Grippers>(other_id).ok())
+				{
+					grippers.last_kill_time = state.hs.time();
+					grippers.power_level += 0.5;
+				}
 			}
 		}
+
 		// TimeToDie.
 		for (id, time_to_die) in self.world.query::<&mut comps::TimeToDie>().iter()
 		{
@@ -2179,6 +2228,7 @@ impl Map
 							self.world.get::<&mut comps::Health>(other_id.unwrap())
 						{
 							health.health -= amount;
+							health.damaged_by = Some(owner);
 						}
 						if let Ok(mut ai) = self.world.get::<&mut comps::AI>(other_id.unwrap())
 						{
@@ -2866,6 +2916,7 @@ impl Map
 		if !self.show_map && self.world.contains(self.player) && self.accept_input
 		{
 			let health = self.world.get::<&comps::Health>(self.player).unwrap();
+			let grippers = self.world.get::<&comps::Grippers>(self.player).unwrap();
 			if !health.dead
 			{
 				let bw = state.hs.buffer_width();
@@ -2873,7 +2924,8 @@ impl Map
 				let cx = bw / 2.;
 				let _cy = bh / 2.;
 
-				let delta_theta = 2. / 3. * PI * health.health / health.max_health;
+				let f = health.health / health.max_health;
+				let delta_theta = 2. / 3. * PI * f;
 				state.hs.prim.draw_arc(
 					cx - 64.,
 					bh - 64.,
@@ -2882,6 +2934,41 @@ impl Map
 					delta_theta,
 					Color::from_rgb_f(0.8, 0.2, 0.2),
 					8.,
+				);
+
+				let lh = state.hs.ui_font().get_line_height() as f32;
+				let percent = (f * 100.).round() as i32;
+				state.hs.core.draw_text(
+					state.hs.ui_font(),
+					Color::from_rgb_f(0.6, 0.8, 0.9),
+					cx - 70.,
+					bh - 64. - lh / 2.,
+					FontAlign::Left,
+					&format!("{percent}"),
+				);
+
+				let f = 1.0
+					- (((state.hs.time - grippers.last_kill_time) / POWER_LEVEL_TIME) as f32)
+						.min(1.);
+				let delta_theta = 2. / 3. * PI * f;
+				state.hs.prim.draw_arc(
+					cx + 64.,
+					bh - 64.,
+					30.,
+					1. / 3. * PI,
+					-delta_theta,
+					Color::from_rgb_f(0.8, 0.8, 0.2),
+					8.,
+				);
+
+				let power_level = grippers.power_level;
+				state.hs.core.draw_text(
+					state.hs.ui_font(),
+					Color::from_rgb_f(0.8, 0.8, 0.2),
+					cx + 20.,
+					bh - 64. - lh / 2.,
+					FontAlign::Left,
+					&format!("{power_level:.1}x"),
 				);
 			}
 		}
