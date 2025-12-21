@@ -3,6 +3,7 @@ use crate::game_state::DT;
 use crate::{components as comps, game_state, ui, utils};
 use allegro::*;
 use allegro_font::*;
+use allegro_primitives::*;
 use allegro_sys::*;
 use itertools::Itertools;
 use na::{
@@ -28,6 +29,21 @@ use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::sync::RwLock;
 
+const PLAYER_GROUP: Group = Group::GROUP_1;
+const GRIPPER_GROUP: Group = Group::GROUP_2;
+const BIG_GROUP: Group = Group::GROUP_3;
+const SMALL_GROUP: Group = Group::GROUP_4;
+
+const POWER_LEVEL_TIME: f64 = 10.0;
+const ENERGY_AMOUNT: f32 = 20.;
+
+fn color_to_array(color: Color) -> [f32; 4]
+{
+	// TODO: Put this into RustAllegro.
+	let (r, g, b, a) = color.to_rgba_f();
+	[r, g, b, a]
+}
+
 fn get_dirs(rot: UnitQuaternion<f32>) -> (Vector3<f32>, Vector3<f32>, Vector3<f32>)
 {
 	let forward = -(rot * Vector3::z());
@@ -36,14 +52,6 @@ fn get_dirs(rot: UnitQuaternion<f32>) -> (Vector3<f32>, Vector3<f32>, Vector3<f3
 
 	(forward, right, up)
 }
-
-const PLAYER_GROUP: Group = Group::GROUP_1;
-const GRIPPER_GROUP: Group = Group::GROUP_2;
-const BIG_GROUP: Group = Group::GROUP_3;
-const SMALL_GROUP: Group = Group::GROUP_4;
-
-const POWER_LEVEL_TIME: f64 = 10.0;
-const ENERGY_AMOUNT: f32 = 20.;
 
 pub struct PhysicsEventHandler
 {
@@ -1362,6 +1370,48 @@ fn set_connector_position(
 	position.snapshot();
 }
 
+fn make_rectangle(display: &mut Display, prim: &PrimitivesAddon) -> VertexBuffer<Vertex>
+{
+	let vtx = Vertex {
+		x: 0.0,
+		y: 0.0,
+		z: 0.0,
+		color: Color::from_rgb_f(1., 1., 1.),
+		u: 0.,
+		v: 0.,
+	};
+	let rect_vertex_buffer = VertexBuffer::new(
+		display,
+		&prim,
+		Some(&[
+			Vertex {
+				x: 0.0,
+				y: 0.0,
+				..vtx
+			},
+			Vertex {
+				x: 1.0,
+				y: 0.0,
+				..vtx
+			},
+			Vertex {
+				x: 1.0,
+				y: 1.0,
+				..vtx
+			},
+			Vertex {
+				x: 0.0,
+				y: 1.0,
+				..vtx
+			},
+		]),
+		4,
+		BUFFER_STATIC,
+	)
+	.unwrap();
+	rect_vertex_buffer
+}
+
 struct Map
 {
 	world: hecs::World,
@@ -1378,6 +1428,7 @@ struct Map
 	map_zoom: f32,
 	level_map: LevelMap,
 	num_gifts: i32,
+	damage_rectangle: VertexBuffer<Vertex>,
 }
 
 impl Map
@@ -1389,6 +1440,7 @@ impl Map
 		game_state::cache_scene(state, "data/sphere.glb")?;
 		game_state::cache_scene(state, "data/test.obj")?;
 		state.cache_bitmap("data/map_texture.png")?;
+		state.cache_bitmap("data/damage_arrow.png")?;
 
 		let mut physics = Physics::new();
 		let LevelProperties {
@@ -1417,6 +1469,7 @@ impl Map
 			map_zoom: 40.,
 			level_map: level_map,
 			num_gifts: num_gifts,
+			damage_rectangle: make_rectangle(state.hs.display.as_mut().unwrap(), &state.hs.prim),
 		})
 	}
 
@@ -2045,6 +2098,7 @@ impl Map
 				if controller.want_enrage
 				{
 					health.health -= 10.;
+					health.damage_time = state.hs.time;
 					grippers.last_kill_time = state.hs.time;
 					grippers.power_level += 0.1;
 				}
@@ -2434,6 +2488,7 @@ impl Map
 							self.world.get::<&mut comps::Health>(other_id.unwrap())
 						{
 							health.health -= amount;
+							health.damage_time = state.hs.time;
 							health.damaged_by = Some(owner);
 						}
 						if let Ok(mut ai) = self.world.get::<&mut comps::AI>(other_id.unwrap())
@@ -3178,14 +3233,10 @@ impl Map
 					));
 				};
 
-				// THIS IS HORRIBLE
-				let color = scene.color;
-				let (r, g, b, a) = color.to_rgba_f();
-				let color = [r, g, b, a];
 				state
 					.hs
 					.core
-					.set_shader_uniform("base_color", &[color][..])
+					.set_shader_uniform("base_color", &[color_to_array(scene.color)][..])
 					.ok();
 
 				state.get_scene(&scene.scene).unwrap().draw(
@@ -3203,6 +3254,11 @@ impl Map
 			.core
 			.use_shader(Some(state.basic_shader.as_ref().unwrap()))
 			.unwrap();
+		state
+			.hs
+			.core
+			.set_shader_uniform("tint", &[color_to_array(Color::from_rgb_f(1., 1., 1.))][..])
+			.ok();
 		unsafe {
 			gl::Disable(gl::CULL_FACE);
 		}
@@ -3228,6 +3284,7 @@ impl Map
 		// HUD
 		if !self.show_map && self.world.contains(self.player) && self.accept_input
 		{
+			let position = self.world.get::<&comps::Position>(self.player).unwrap();
 			let health = self.world.get::<&comps::Health>(self.player).unwrap();
 			let grippers = self.world.get::<&comps::Grippers>(self.player).unwrap();
 			let inventory = self.world.get::<&comps::Inventory>(self.player).unwrap();
@@ -3317,6 +3374,78 @@ impl Map
 					16.,
 					FontAlign::Left,
 					&format!("{:>2} / {:}", inventory.num_gifts, self.num_gifts),
+				);
+
+				let damage_arrow = state.get_bitmap("data/damage_arrow.png")?;
+				let arrow_w = damage_arrow.get_width() as f32;
+				let arrow_h = damage_arrow.get_height() as f32;
+				let f = 1. - ((state.hs.time - health.damage_time) / 0.5).min(1.) as f32;
+
+				let mut dir = None;
+				if let Some(other_id) = health.damaged_by
+				{
+					if let Ok(other_position) = self.world.get::<&comps::Position>(other_id)
+					{
+						let diff = other_position.pos - position.pos;
+						let (_, right, up) = get_dirs(position.rot);
+						let dirs = [
+							diff.dot(&right),
+							-diff.dot(&up),
+							-diff.dot(&right),
+							diff.dot(&up),
+						];
+						dir = dirs
+							.into_iter()
+							.map(ordered_float::OrderedFloat)
+							.position_max()
+					}
+				}
+
+				if let Some(dir) = dir
+				{
+					let (dx, dy, angle) = [
+						(bw - arrow_h / 2., bh / 2., PI / 2.),
+						(bw / 2., bh - arrow_h / 2., PI),
+						(arrow_h / 2., bh / 2., 3. * PI / 2.),
+						(bw / 2., arrow_h / 2., 0.),
+					][dir];
+
+					state.hs.core.draw_tinted_rotated_bitmap(
+						damage_arrow,
+						Color::from_rgba_f(f * 0.5, 0., 0., f * 0.5),
+						arrow_w / 2.,
+						arrow_h / 2.,
+						dx,
+						dy,
+						angle,
+						Flag::zero(),
+					);
+				}
+
+				state
+					.hs
+					.core
+					.set_shader_uniform(
+						"tint",
+						&[color_to_array(Color::from_rgba_f(
+							0.25 * f,
+							0.,
+							0.,
+							0.25 * f,
+						))][..],
+					)
+					.ok();
+				let mut transform = Transform::identity();
+				transform.translate(-0.5, -0.5);
+				transform.scale(bw, bh);
+				transform.translate(bw / 2., bh / 2.);
+				state.hs.core.use_transform(&transform);
+				state.hs.prim.draw_vertex_buffer(
+					&self.damage_rectangle,
+					Option::<&Bitmap>::None,
+					0,
+					4,
+					PrimType::TriangleFan,
 				);
 			}
 		}

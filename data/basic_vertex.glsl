@@ -5,10 +5,11 @@ layout(location = 2) in vec2 al_texcoord;
 varying vec4 varying_color;
 varying vec2 varying_texcoord;
 uniform mat4 al_projview_matrix;
+uniform vec4 tint;
 
 void main()
 {
-   varying_color = al_color;
+   varying_color = tint * al_color;
    varying_texcoord = al_texcoord;
    gl_Position = al_projview_matrix * al_pos;
 }
