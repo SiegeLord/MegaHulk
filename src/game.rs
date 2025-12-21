@@ -23,6 +23,7 @@ use rapier3d::geometry::{
 	Group, InteractionGroups, NarrowPhase, Ray, SharedShape, TriMeshFlags,
 };
 use rapier3d::pipeline::{ActiveEvents, EventHandler, PhysicsPipeline, QueryFilter};
+use serde_derive::{Deserialize, Serialize};
 use slhack::{controls, scene, sprite, ui as slhack_ui};
 
 use std::collections::HashMap;
@@ -183,7 +184,7 @@ impl Game
 	pub fn new(state: &mut game_state::GameState) -> Result<Self>
 	{
 		Ok(Self {
-			map: Map::new("data/test_level.glb", state)?,
+			map: Map::new("data/test_level.cfg", state)?,
 			subscreens: ui::SubScreens::new(state),
 		})
 	}
@@ -602,36 +603,21 @@ pub fn spawn_item(
 			Color::from_rgb_f(1., 1., 1.),
 			Some(Color::from_rgb_f(0., 0., 1.)),
 			None,
-			vec![
-				comps::Effect::SpawnExplosion {
-					kind: comps::ExplosionKind::Energy,
-				},
-				comps::Effect::PickupItem { kind: kind },
-			],
+			vec![comps::Effect::PickupItem { kind: kind }],
 		),
 		comps::ItemKind::Key { kind: key_kind } => (
 			"data/key.glb",
 			key_kind.color(),
 			Some(key_kind.color()),
 			None,
-			vec![
-				comps::Effect::SpawnExplosion {
-					kind: comps::ExplosionKind::Energy,
-				},
-				comps::Effect::PickupItem { kind: kind },
-			],
+			vec![comps::Effect::PickupItem { kind: kind }],
 		),
 		comps::ItemKind::Gift => (
 			"data/gift.glb",
 			Color::from_rgb_f(1., 1., 1.),
 			None,
 			Some(("data/gift_map.glb", Color::from_rgb_f(1., 0., 1.))),
-			vec![
-				comps::Effect::SpawnExplosion {
-					kind: comps::ExplosionKind::Energy,
-				},
-				comps::Effect::PickupItem { kind: kind },
-			],
+			vec![comps::Effect::PickupItem { kind: kind }],
 		),
 	};
 	game_state::cache_scene(state, scene_name)?;
@@ -1412,12 +1398,18 @@ fn make_rectangle(display: &mut Display, prim: &PrimitivesAddon) -> VertexBuffer
 	rect_vertex_buffer
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct LevelDesc
+{
+	scene: String,
+	name: String,
+}
+
 struct Map
 {
 	world: hecs::World,
 	physics: Physics,
 	camera_target: comps::Position,
-	level_name: String,
 	camera: hecs::Entity,
 	player: hecs::Entity,
 	accept_input: bool,
@@ -1429,18 +1421,24 @@ struct Map
 	level_map: LevelMap,
 	num_gifts: i32,
 	damage_rectangle: VertexBuffer<Vertex>,
+	level_desc: LevelDesc,
 }
 
 impl Map
 {
-	fn new(level_name: &str, state: &mut game_state::GameState) -> Result<Self>
+	fn new(level_desc: &str, state: &mut game_state::GameState) -> Result<Self>
 	{
+		let level_desc: LevelDesc = utils::load_config(level_desc)?;
+
 		let mut world = hecs::World::new();
 
 		game_state::cache_scene(state, "data/sphere.glb")?;
 		game_state::cache_scene(state, "data/test.obj")?;
 		state.cache_bitmap("data/map_texture.png")?;
 		state.cache_bitmap("data/damage_arrow.png")?;
+		state.cache_bitmap("data/hud.png")?;
+		state.cache_bitmap("data/hud_key.png")?;
+		state.cache_bitmap("data/hud_gift.png")?;
 
 		let mut physics = Physics::new();
 		let LevelProperties {
@@ -1448,7 +1446,7 @@ impl Map
 			level_map,
 			player,
 			num_gifts,
-		} = spawn_level(level_name, &mut physics, &mut world, state)?;
+		} = spawn_level(&level_desc.scene, &mut physics, &mut world, state)?;
 
 		let player_position = { (*world.get::<&comps::Position>(player)?).clone() };
 		let map_rot =
@@ -1461,7 +1459,6 @@ impl Map
 			player: player,
 			accept_input: true,
 			camera: player,
-			level_name: level_name.to_string(),
 			level: level,
 			delayed_effects: vec![],
 			show_map: false,
@@ -1470,6 +1467,7 @@ impl Map
 			level_map: level_map,
 			num_gifts: num_gifts,
 			damage_rectangle: make_rectangle(state.hs.display.as_mut().unwrap(), &state.hs.prim),
+			level_desc: level_desc,
 		})
 	}
 
@@ -2637,20 +2635,20 @@ impl Map
 					comps::Effect::StartExitAnimation =>
 					{
 						spawn_exit_explosions(
-							&self.level_name,
+							&self.level_desc.scene,
 							"ExitExplosions",
 							&mut self.world,
 							state,
 						)?;
 						spawn_player_exit_track(
-							&self.level_name,
+							&self.level_desc.scene,
 							"ExitTrack",
 							self.player,
 							&mut self.world,
 							state,
 						)?;
 						self.camera = spawn_animated_target(
-							&self.level_name,
+							&self.level_desc.scene,
 							"ExitCamera",
 							&mut self.world,
 							state,
@@ -2680,6 +2678,7 @@ impl Map
 					comps::Effect::SpawnDeathCamera =>
 					{
 						self.accept_input = false;
+						self.show_map = false;
 						let mut src_pos = None;
 						if let Ok(position) = self.world.get::<&comps::Position>(id)
 						{
@@ -3282,7 +3281,12 @@ impl Map
 		state.hs.core.use_transform(&Transform::identity());
 
 		// HUD
-		if !self.show_map && self.world.contains(self.player) && self.accept_input
+		let bw = state.hs.buffer_width();
+		let bh = state.hs.buffer_height();
+		let cx = bw / 2.;
+		let lh = state.hs.ui_font().get_line_height() as f32;
+
+		if self.world.contains(self.player) && self.accept_input
 		{
 			let position = self.world.get::<&comps::Position>(self.player).unwrap();
 			let health = self.world.get::<&comps::Health>(self.player).unwrap();
@@ -3290,91 +3294,133 @@ impl Map
 			let inventory = self.world.get::<&comps::Inventory>(self.player).unwrap();
 			if !health.dead
 			{
-				let bw = state.hs.buffer_width();
-				let bh = state.hs.buffer_height();
-				let cx = bw / 2.;
-				let _cy = bh / 2.;
-
-				let f = health.recovery / health.max_recovery;
-				let delta_theta = 2. / 3. * PI * f;
-				state.hs.prim.draw_arc(
-					cx - 64.,
-					bh - 64.,
-					22.,
-					2. / 3. * PI,
-					delta_theta,
-					Color::from_rgb_f(0.5, 0.5, 0.8),
-					8.,
-				);
-
-				let f = health.health / health.max_health;
-				let delta_theta = 2. / 3. * PI * f;
-				state.hs.prim.draw_arc(
-					cx - 64.,
-					bh - 64.,
-					30.,
-					2. / 3. * PI,
-					delta_theta,
-					Color::from_rgb_f(0.8, 0.2, 0.2),
-					8.,
-				);
-
-				let lh = state.hs.ui_font().get_line_height() as f32;
-				let percent = (f * 100.).round() as i32;
-				state.hs.core.draw_text(
-					state.hud_font(),
-					Color::from_rgb_f(0.6, 0.8, 0.9),
-					cx - 70.,
-					bh - 64. - lh / 2.,
-					FontAlign::Left,
-					&format!("{percent}"),
-				);
-
-				let percent = (health.recovery / health.max_health * 100.).round() as i32;
-				if percent > 0
+				if !self.show_map
 				{
+					let f = health.recovery / health.max_recovery;
+					let delta_theta = 2. / 3. * PI * f;
+					state.hs.prim.draw_arc(
+						cx - 64.,
+						bh - 64.,
+						22.,
+						2. / 3. * PI,
+						delta_theta,
+						Color::from_rgb_f(0.5, 0.5, 0.8),
+						8.,
+					);
+
+					let f = health.health / health.max_health;
+					let delta_theta = 2. / 3. * PI * f;
+					state.hs.prim.draw_arc(
+						cx - 64.,
+						bh - 64.,
+						30.,
+						2. / 3. * PI,
+						delta_theta,
+						Color::from_rgb_f(0.8, 0.2, 0.2),
+						8.,
+					);
+
+					let percent = (f * 100.).round() as i32;
 					state.hs.core.draw_text(
-						state.small_hud_font(),
+						state.hud_font(),
 						Color::from_rgb_f(0.6, 0.8, 0.9),
 						cx - 70.,
-						bh - 64. - lh / 2. + 16.,
+						bh - 64. - lh / 2.,
 						FontAlign::Left,
-						&format!("+{percent}"),
+						&format!("{percent}"),
+					);
+
+					let percent = (health.recovery / health.max_health * 100.).round() as i32;
+					if percent > 0
+					{
+						state.hs.core.draw_text(
+							state.small_hud_font(),
+							Color::from_rgb_f(0.6, 0.8, 0.9),
+							cx - 70.,
+							bh - 64. - lh / 2. + 16.,
+							FontAlign::Left,
+							&format!("+{percent}"),
+						);
+					}
+
+					let f = 1.0
+						- (((state.hs.time - grippers.last_kill_time) / POWER_LEVEL_TIME) as f32)
+							.min(1.);
+					let delta_theta = 2. / 3. * PI * f;
+					state.hs.prim.draw_arc(
+						cx + 64.,
+						bh - 64.,
+						30.,
+						1. / 3. * PI,
+						-delta_theta,
+						Color::from_rgb_f(0.8, 0.8, 0.2),
+						8.,
+					);
+
+					let power_level = grippers.power_level;
+					state.hs.core.draw_text(
+						state.hud_font(),
+						Color::from_rgb_f(0.8, 0.8, 0.2),
+						cx + 20.,
+						bh - 64. - lh / 2.,
+						FontAlign::Left,
+						&format!("{power_level:.1}x"),
+					);
+					let hud = state.get_bitmap("data/hud.png")?;
+					let hud_w = hud.get_width() as f32;
+					let hud_h = hud.get_height() as f32;
+					state.hs.core.draw_bitmap(
+						hud,
+						cx - hud_w / 2.,
+						bh - 64. - hud_h / 2.,
+						Flag::zero(),
 					);
 				}
 
-				let f = 1.0
-					- (((state.hs.time - grippers.last_kill_time) / POWER_LEVEL_TIME) as f32)
-						.min(1.);
-				let delta_theta = 2. / 3. * PI * f;
-				state.hs.prim.draw_arc(
-					cx + 64.,
-					bh - 64.,
-					30.,
-					1. / 3. * PI,
-					-delta_theta,
-					Color::from_rgb_f(0.8, 0.8, 0.2),
-					8.,
-				);
+				let hud_gift = state.get_bitmap("data/hud_gift.png")?;
+				let hud_gift_w = hud_gift.get_width() as f32;
+				let hud_gift_h = hud_gift.get_height() as f32;
 
-				let power_level = grippers.power_level;
-				state.hs.core.draw_text(
-					state.hud_font(),
-					Color::from_rgb_f(0.8, 0.8, 0.2),
-					cx + 20.,
-					bh - 64. - lh / 2.,
-					FontAlign::Left,
-					&format!("{power_level:.1}x"),
+				state.hs.core.draw_tinted_bitmap(
+					hud_gift,
+					Color::from_rgb_f(1., 1., 1.),
+					32. - hud_gift_w / 2.,
+					16. + lh / 2. - hud_gift_h / 2.,
+					Flag::zero(),
 				);
 
 				state.hs.core.draw_text(
 					state.hud_font(),
 					Color::from_rgb_f(0.6, 0.8, 0.9),
-					16.,
+					36.,
 					16.,
 					FontAlign::Left,
-					&format!("{:>2} / {:}", inventory.num_gifts, self.num_gifts),
+					&format!("{:>2}/{:}", inventory.num_gifts, self.num_gifts),
 				);
+
+				let hud_key = state.get_bitmap("data/hud_key.png")?;
+				let hud_key_w = hud_key.get_width() as f32;
+				let hud_key_h = hud_key.get_height() as f32;
+
+				for (i, key) in [
+					comps::KeyKind::Red,
+					comps::KeyKind::Yellow,
+					comps::KeyKind::Blue,
+				]
+				.iter()
+				.enumerate()
+				{
+					if inventory.keys.contains(key)
+					{
+						state.hs.core.draw_tinted_bitmap(
+							hud_key,
+							key.color(),
+							bw - 64. - hud_key_w + 24. * i as f32,
+							32. - hud_key_h,
+							Flag::zero(),
+						);
+					}
+				}
 
 				let damage_arrow = state.get_bitmap("data/damage_arrow.png")?;
 				let arrow_w = damage_arrow.get_width() as f32;
@@ -3448,6 +3494,23 @@ impl Map
 					PrimType::TriangleFan,
 				);
 			}
+		}
+		state.hs.core.use_transform(&Transform::identity());
+		state
+			.hs
+			.core
+			.set_shader_uniform("tint", &[color_to_array(Color::from_rgb_f(1., 1., 1.))][..])
+			.ok();
+		if self.show_map
+		{
+			state.hs.core.draw_text(
+				state.hud_font(),
+				Color::from_rgb_f(0.8, 0.8, 0.8),
+				cx,
+				bh - lh - 4.,
+				FontAlign::Centre,
+				&self.level_desc.name,
+			);
 		}
 		// state
 		// 	.hs
