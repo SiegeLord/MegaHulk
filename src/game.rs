@@ -43,6 +43,7 @@ const BIG_GROUP: Group = Group::GROUP_3;
 const SMALL_GROUP: Group = Group::GROUP_4;
 
 const POWER_LEVEL_TIME: f64 = 10.0;
+const ENERGY_AMOUNT: f32 = 20.;
 
 pub struct PhysicsEventHandler
 {
@@ -586,16 +587,28 @@ pub fn spawn_item(
 	world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let (scene_name, color, effects) = match kind
+	let (scene_name, scene_color, color, effects) = match kind
 	{
 		comps::ItemKind::Energy => (
 			"data/energy.glb",
+			Color::from_rgb_f(1., 1., 1.),
 			Color::from_rgb_f(0., 0., 1.),
-			&[
+			vec![
 				comps::Effect::SpawnExplosion {
 					kind: comps::ExplosionKind::Energy,
 				},
-				comps::Effect::PickupRecovery { amount: 20. },
+				comps::Effect::PickupItem { kind: kind },
+			],
+		),
+		comps::ItemKind::Key { kind: key_kind } => (
+			"data/key.glb",
+			key_kind.color(),
+			key_kind.color(),
+			vec![
+				comps::Effect::SpawnExplosion {
+					kind: comps::ExplosionKind::Energy,
+				},
+				comps::Effect::PickupItem { kind: kind },
 			],
 		),
 	};
@@ -603,15 +616,18 @@ pub fn spawn_item(
 	let dir = Vector3::from_row_slice(&rand_distr::UnitSphere.sample(&mut rand::rng()));
 	let rot = UnitQuaternion::face_towards(&dir, &Vector3::y());
 
+	let mut scene = comps::Scene::new_with_animation(scene_name, "Play");
+	scene.color = scene_color;
+
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
-		comps::Scene::new_with_animation(scene_name, "Play"),
+		scene,
 		comps::Light {
 			color: color,
 			intensity: 100.,
 			static_: false,
 		},
-		comps::OnCollideEffects::new(effects),
+		comps::OnCollideEffects::new(&effects),
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -675,6 +691,7 @@ pub fn spawn_player(
 		}]),
 		health,
 		map_scene,
+		comps::Inventory::new(),
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -916,8 +933,8 @@ pub fn spawn_light(
 }
 
 fn spawn_door(
-	pos: Point3<f32>, rot: UnitQuaternion<f32>, open_on_exit: bool, physics: &mut Physics,
-	world: &mut hecs::World, state: &mut game_state::GameState,
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, open_on_exit: bool, key: Option<comps::KeyKind>,
+	physics: &mut Physics, world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	let scene_name = "data/door1.glb";
@@ -925,12 +942,17 @@ fn spawn_door(
 	game_state::cache_scene(state, map_scene_name)?;
 	let scene = game_state::cache_scene(state, scene_name)?;
 
+	let mut map_scene = comps::MapScene::new(map_scene_name);
+	map_scene.color = key
+		.map(|k| k.color())
+		.unwrap_or(Color::from_rgb_f(1., 1., 1.));
+
 	//scene.animation_states = animation_states;
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Scene::new(scene_name),
-		comps::MapScene::new(map_scene_name),
-		comps::Door::new(open_on_exit),
+		map_scene,
+		comps::Door::new(open_on_exit, key),
 		comps::OnCollideEffects::new(&[comps::Effect::Open]),
 	));
 
@@ -1182,9 +1204,30 @@ fn spawn_level(
 						.and_then(|o| o.get("open_on_exit"))
 						.and_then(|b| b.as_bool())
 						.unwrap_or(false);
+
+					let key_str = object
+						.properties
+						.as_object()
+						.and_then(|o| o.get("key"))
+						.and_then(|s| s.as_str());
+
+					let key = if let Some(key_str) = key_str
+					{
+						Some(comps::KeyKind::from_str(key_str).ok_or_else(|| {
+							format!(
+								"Unknown key type '{}' for Door object: {}",
+								key_str, object.name
+							)
+						})?)
+					}
+					else
+					{
+						None
+					};
+
 					spawn_fns.push(Box::new(
 						move |physics, world, state| -> Result<hecs::Entity> {
-							spawn_door(pos, rot, open_on_exit, physics, world, state)
+							spawn_door(pos, rot, open_on_exit, key, physics, world, state)
 						},
 					));
 				}
@@ -1205,23 +1248,15 @@ fn spawn_level(
 						.and_then(|s| s.as_str())
 						.unwrap_or("");
 
-					let kind_str = kind_str.to_string();
-					let object_name = object.name.clone();
+					let kind = comps::ItemKind::from_str(&kind_str).ok_or_else(|| {
+						format!(
+							"Unknown item type '{}' for Item object: {}",
+							kind_str, object.name
+						)
+					})?;
 					spawn_fns.push(Box::new(
 						move |physics, world, state| -> Result<hecs::Entity> {
-							spawn_item(
-								pos,
-								Vector3::zeros(),
-								comps::ItemKind::from_str(&kind_str).ok_or_else(|| {
-									format!(
-										"Unknown item type '{}' for item object: {}",
-										kind_str, object_name
-									)
-								})?,
-								physics,
-								world,
-								state,
-							)
+							spawn_item(pos, Vector3::zeros(), kind, physics, world, state)
 						},
 					));
 				}
@@ -1809,7 +1844,6 @@ impl Map
 						}
 					}
 
-					let mut reattach_gripper = false;
 					if let Some(gripper) = self
 						.world
 						.query_one::<&mut comps::Gripper>(id)
@@ -1907,19 +1941,20 @@ impl Map
 								}
 								else
 								{
-									reattach_gripper = true;
-									gripper.status = comps::GripperStatus::AttachedToParent;
-									if let Some(connector_id) = gripper.connector.take()
+									if self.world.get::<&comps::Door>(other_id).is_ok()
 									{
-										to_die.push(connector_id);
+										effects.push((comps::Effect::SpawnHit, id, Some(other_id)));
 									}
+									// This is an effect because we want to spawn the hit at a
+									// location before we attach it.
+									self.delayed_effects.push((
+										comps::Effect::ReattachGripper,
+										id,
+										None,
+									));
 								}
 							}
 						}
-					}
-					if reattach_gripper
-					{
-						attach_gripper_to_parent(id, &self.world, &mut self.physics);
 					}
 				}
 			}
@@ -2429,6 +2464,27 @@ impl Map
 								// Don't open on touch.
 								continue;
 							}
+							if let Some(key) = door.key
+							{
+								let mut do_open = false;
+								if let Some(mut other_id) = other_id
+								{
+									if let Ok(gripper) = self.world.get::<&comps::Gripper>(other_id)
+									{
+										other_id = gripper.parent;
+									}
+									if let Ok(inventory) =
+										self.world.get::<&comps::Inventory>(other_id)
+									{
+										do_open = inventory.keys.contains(&key);
+									}
+								}
+								if !do_open
+								{
+									continue;
+								}
+							}
+
 							let mut can_open = true;
 							for animation_state in scene.animation_states.values()
 							{
@@ -2539,10 +2595,11 @@ impl Map
 						self.world
 							.insert_one(id, comps::TimeToDie::new(state.hs.time + delay))?;
 					}
-					comps::Effect::PickupRecovery { amount } =>
+					comps::Effect::PickupItem { kind } =>
 					{
 						if let Some(other_id) = other_id
 						{
+							// HACK: Could we have gotten away with some collision proxy component?
 							let mut do_pickup = other_id == self.player;
 							if !do_pickup
 							{
@@ -2554,11 +2611,25 @@ impl Map
 
 							if do_pickup
 							{
-								if let Ok(mut health) =
-									self.world.get::<&mut comps::Health>(self.player)
+								match kind
 								{
-									health.recovery =
-										(health.recovery + amount).min(health.max_recovery);
+									comps::ItemKind::Energy =>
+									{
+										if let Ok(mut health) =
+											self.world.get::<&mut comps::Health>(self.player)
+										{
+											health.recovery = (health.recovery + ENERGY_AMOUNT)
+												.min(health.max_recovery);
+										}
+									}
+									comps::ItemKind::Key { kind } =>
+									{
+										if let Ok(mut inventory) =
+											self.world.get::<&mut comps::Inventory>(self.player)
+										{
+											inventory.keys.insert(kind);
+										}
+									}
 								}
 								to_die.push(id);
 							}
@@ -2593,6 +2664,23 @@ impl Map
 									state,
 								)?;
 							}
+						}
+					}
+					comps::Effect::ReattachGripper =>
+					{
+						let mut do_attach = false;
+						if let Ok(mut gripper) = self.world.get::<&mut comps::Gripper>(id)
+						{
+							gripper.status = comps::GripperStatus::AttachedToParent;
+							if let Some(connector_id) = gripper.connector.take()
+							{
+								to_die.push(connector_id);
+							}
+							do_attach = true;
+						}
+						if do_attach
+						{
+							attach_gripper_to_parent(id, &self.world, &mut self.physics);
 						}
 					}
 				}

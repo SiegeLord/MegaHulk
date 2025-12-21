@@ -3,7 +3,7 @@ use nalgebra::{Point3, Quaternion, Unit, Vector3};
 use rand::prelude::*;
 use rapier3d::dynamics::ImpulseJointHandle;
 use slhack::{scene, sprite};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Copy, Clone)]
 pub struct Light
@@ -367,10 +367,46 @@ pub enum ExplosionKind
 	Energy,
 }
 
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+pub enum KeyKind
+{
+	Red,
+	Yellow,
+	Blue,
+}
+
+impl KeyKind
+{
+	pub fn color(&self) -> Color
+	{
+		match self
+		{
+			KeyKind::Red => Color::from_rgb_f(1., 0., 0.),
+			KeyKind::Yellow => Color::from_rgb_f(1., 1., 0.),
+			KeyKind::Blue => Color::from_rgb_f(0., 0., 1.),
+		}
+	}
+
+	pub fn from_str(key: &str) -> Option<Self>
+	{
+		match key
+		{
+			"red" => Some(Self::Red),
+			"yellow" => Some(Self::Yellow),
+			"blue" => Some(Self::Blue),
+			_ => None,
+		}
+	}
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum ItemKind
 {
 	Energy,
+	Key
+	{
+		kind: KeyKind,
+	},
 }
 
 impl ItemKind
@@ -380,6 +416,13 @@ impl ItemKind
 		match s
 		{
 			"energy" => Some(Self::Energy),
+			"red_key" => Some(Self::Key { kind: KeyKind::Red }),
+			"blue_key" => Some(Self::Key {
+				kind: KeyKind::Blue,
+			}),
+			"yellow_key" => Some(Self::Key {
+				kind: KeyKind::Yellow,
+			}),
 			_ => None,
 		}
 	}
@@ -415,14 +458,15 @@ pub enum Effect
 	{
 		delay: f64,
 	},
-	PickupRecovery
+	PickupItem
 	{
-		amount: f32,
+		kind: ItemKind,
 	},
 	SpawnItem
 	{
 		spawn_table: Vec<(f32, ItemKind)>,
 	},
+	ReattachGripper,
 }
 
 #[derive(Debug, Clone)]
@@ -487,17 +531,19 @@ pub struct Door
 	pub status: DoorStatus,
 	pub time_to_close: f64,
 	pub want_open: bool,
+	pub key: Option<KeyKind>,
 }
 
 impl Door
 {
-	pub fn new(open_on_exit: bool) -> Self
+	pub fn new(open_on_exit: bool, key: Option<KeyKind>) -> Self
 	{
 		Door {
 			open_on_exit: open_on_exit,
 			status: DoorStatus::Closed,
 			time_to_close: 0.,
 			want_open: false,
+			key: key,
 		}
 	}
 }
@@ -632,5 +678,21 @@ impl Stats
 		self.cur = self.base.clone();
 		self.cur.speed *= power_level;
 		//self.cur.rot_speed *= power_level;
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct Inventory
+{
+	pub keys: HashSet<KeyKind>,
+}
+
+impl Inventory
+{
+	pub fn new() -> Self
+	{
+		Self {
+			keys: HashSet::new(),
+		}
 	}
 }
