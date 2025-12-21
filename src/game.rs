@@ -297,13 +297,18 @@ pub fn spawn_robot(
 		comps::Position::new(pos, rot),
 		comps::Scene::new(scene_name),
 		comps::Controller::new(),
-		comps::Health::new(35.),
+		comps::Health::new(5.),
 		comps::AI::new(),
 		comps::Weapon::new(Vector3::new(0., 0., -1.)),
 		comps::Stats::new(comps::StatValues::new_robot()),
-		comps::OnDeathEffects::new(&[comps::Effect::SpawnExplosion {
-			kind: comps::ExplosionKind::Big,
-		}]),
+		comps::OnDeathEffects::new(&[
+			comps::Effect::SpawnExplosion {
+				kind: comps::ExplosionKind::Big,
+			},
+			comps::Effect::SpawnItem {
+				spawn_table: vec![(0.5, comps::ItemKind::Energy)],
+			},
+		]),
 	));
 
 	let rigid_body = RigidBodyBuilder::dynamic()
@@ -576,6 +581,70 @@ pub fn attach_gripper_to_parent(
 	gripper.attach_joint = Some(joint_handle);
 }
 
+pub fn spawn_item(
+	pos: Point3<f32>, vel: Vector3<f32>, kind: comps::ItemKind, physics: &mut Physics,
+	world: &mut hecs::World, state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let (scene_name, color, effects) = match kind
+	{
+		comps::ItemKind::Energy => (
+			"data/energy.glb",
+			Color::from_rgb_f(0., 0., 1.),
+			&[
+				comps::Effect::SpawnExplosion {
+					kind: comps::ExplosionKind::Energy,
+				},
+				comps::Effect::PickupRecovery { amount: 20. },
+			],
+		),
+	};
+	game_state::cache_scene(state, scene_name)?;
+	let dir = Vector3::from_row_slice(&rand_distr::UnitSphere.sample(&mut rand::rng()));
+	let rot = UnitQuaternion::face_towards(&dir, &Vector3::y());
+
+	let entity = world.spawn((
+		comps::Position::new(pos, rot),
+		comps::Scene::new_with_animation(scene_name, "Play"),
+		comps::Light {
+			color: color,
+			intensity: 100.,
+			static_: false,
+		},
+		comps::OnCollideEffects::new(effects),
+	));
+	let rigid_body = RigidBodyBuilder::dynamic()
+		.translation(pos.coords)
+		.angular_damping(10.)
+		.linear_damping(3.)
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let collider = ColliderBuilder::ball(0.25)
+		.restitution(0.1)
+		.mass(0.1)
+		.friction(0.)
+		.user_data(entity.to_bits().get() as u128)
+		.collision_groups(InteractionGroups::new(
+			BIG_GROUP,
+			PLAYER_GROUP | BIG_GROUP | GRIPPER_GROUP,
+		))
+		.active_events(ActiveEvents::COLLISION_EVENTS)
+		.build();
+	let body_handle = physics.rigid_body_set.insert(rigid_body);
+	physics
+		.collider_set
+		.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
+	world.insert_one(entity, comps::Physics::new(body_handle))?;
+
+	physics
+		.rigid_body_set
+		.get_mut(body_handle)
+		.unwrap()
+		.apply_impulse(vel, true);
+
+	Ok(entity)
+}
+
 pub fn spawn_player(
 	pos: Point3<f32>, rot: UnitQuaternion<f32>, physics: &mut Physics, world: &mut hecs::World,
 	state: &mut game_state::GameState,
@@ -755,14 +824,15 @@ pub fn spawn_explosion(
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scale = match kind
+	let (color, scale) = match kind
 	{
-		comps::ExplosionKind::Small => 0.1,
-		comps::ExplosionKind::Big => 0.5,
+		comps::ExplosionKind::Small => (Color::from_rgb_f(1., 0.5, 0.), 0.1),
+		comps::ExplosionKind::Big => (Color::from_rgb_f(1., 0.5, 0.), 0.5),
+		comps::ExplosionKind::Energy => (Color::from_rgb_f(0.5, 0.5, 1.), 0.2),
 	};
 	let scene_name = "data/explosion.glb";
 	let mut scene = comps::AdditiveScene::new(scene_name);
-	scene.color = Color::from_rgb_f(1.0, 0.5, 0.);
+	scene.color = color;
 	game_state::cache_scene(state, scene_name)?;
 	let dir = Vector3::from_row_slice(&rand_distr::UnitSphere.sample(&mut rand::rng()));
 	let rot = UnitQuaternion::face_towards(&dir, &Vector3::y());
@@ -772,7 +842,7 @@ pub fn spawn_explosion(
 		comps::ExplosionScaling::new(4.),
 		comps::TimeToDie::new(state.hs.time() + 0.2 * scale as f64),
 		comps::Light {
-			color: Color::from_rgb_f(1., 0.5, 0.),
+			color: color,
 			intensity: scale * 500.,
 			static_: false,
 		},
@@ -1123,6 +1193,35 @@ fn spawn_level(
 					spawn_fns.push(Box::new(
 						move |physics, world, state| -> Result<hecs::Entity> {
 							spawn_robot(pos, rot, physics, world, state)
+						},
+					));
+				}
+				else if object.name.starts_with("Item")
+				{
+					let kind_str = object
+						.properties
+						.as_object()
+						.and_then(|o| o.get("kind"))
+						.and_then(|s| s.as_str())
+						.unwrap_or("");
+
+					let kind_str = kind_str.to_string();
+					let object_name = object.name.clone();
+					spawn_fns.push(Box::new(
+						move |physics, world, state| -> Result<hecs::Entity> {
+							spawn_item(
+								pos,
+								Vector3::zeros(),
+								comps::ItemKind::from_str(&kind_str).ok_or_else(|| {
+									format!(
+										"Unknown item type '{}' for item object: {}",
+										kind_str, object_name
+									)
+								})?,
+								physics,
+								world,
+								state,
+							)
 						},
 					));
 				}
@@ -1710,6 +1809,7 @@ impl Map
 						}
 					}
 
+					let mut reattach_gripper = false;
 					if let Some(gripper) = self
 						.world
 						.query_one::<&mut comps::Gripper>(id)
@@ -1775,9 +1875,9 @@ impl Map
 							}
 							else
 							{
-								if let Some(target_physics) = self
+								if let Some((_, target_physics)) = self
 									.world
-									.query_one::<&comps::Physics>(other_id)
+									.query_one::<(&comps::Health, &comps::Physics)>(other_id)
 									.unwrap()
 									.get()
 								{
@@ -1805,8 +1905,21 @@ impl Map
 										Some(other_id),
 									));
 								}
+								else
+								{
+									reattach_gripper = true;
+									gripper.status = comps::GripperStatus::AttachedToParent;
+									if let Some(connector_id) = gripper.connector.take()
+									{
+										to_die.push(connector_id);
+									}
+								}
 							}
 						}
+					}
+					if reattach_gripper
+					{
+						attach_gripper_to_parent(id, &self.world, &mut self.physics);
 					}
 				}
 			}
@@ -2425,6 +2538,62 @@ impl Map
 					{
 						self.world
 							.insert_one(id, comps::TimeToDie::new(state.hs.time + delay))?;
+					}
+					comps::Effect::PickupRecovery { amount } =>
+					{
+						if let Some(other_id) = other_id
+						{
+							let mut do_pickup = other_id == self.player;
+							if !do_pickup
+							{
+								if let Ok(gripper) = self.world.get::<&comps::Gripper>(other_id)
+								{
+									do_pickup = gripper.parent == self.player;
+								}
+							}
+
+							if do_pickup
+							{
+								if let Ok(mut health) =
+									self.world.get::<&mut comps::Health>(self.player)
+								{
+									health.recovery =
+										(health.recovery + amount).min(health.max_recovery);
+								}
+								to_die.push(id);
+							}
+						}
+					}
+					comps::Effect::SpawnItem { spawn_table } =>
+					{
+						let mut src_pos = None;
+						if let Ok(position) = self.world.get::<&comps::Position>(id)
+						{
+							src_pos = Some(position.pos);
+						}
+						if let Some(src_pos) = src_pos
+						{
+							let total_prob: f32 = spawn_table.iter().map(|(w, _)| w).sum();
+							let mut rng = rand::rng();
+							if rng.random_range(0.0..1.0) < total_prob
+							{
+								let item_kind = spawn_table
+									.choose_weighted(&mut rng, |&(w, _)| w)
+									.unwrap()
+									.1;
+								spawn_item(
+									src_pos,
+									0.5 * Vector3::<f64>::from_row_slice(
+										&rand_distr::UnitSphere.sample(&mut rng),
+									)
+									.cast::<f32>(),
+									item_kind,
+									&mut self.physics,
+									&mut self.world,
+									state,
+								)?;
+							}
+						}
 					}
 				}
 			}

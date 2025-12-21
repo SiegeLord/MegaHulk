@@ -2,7 +2,7 @@ use allegro::*;
 use nalgebra::{Point3, Quaternion, Unit, Vector3};
 use rand::prelude::*;
 use rapier3d::dynamics::ImpulseJointHandle;
-use slhack::sprite;
+use slhack::{scene, sprite};
 use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone)]
@@ -92,6 +92,23 @@ impl Scene
 			scene: scene.to_string(),
 			color: Color::from_rgb_f(1., 1., 1.),
 			animation_states: HashMap::new(),
+		}
+	}
+
+	pub fn new_with_animation(scene: &str, animation: &str) -> Self
+	{
+		let mut animation_states = HashMap::new();
+		animation_states.insert(
+			0,
+			AnimationState {
+				speed: 1.0,
+				state: scene::AnimationState::new(animation, false),
+			},
+		);
+		Self {
+			scene: scene.to_string(),
+			color: Color::from_rgb_f(1., 1., 1.),
+			animation_states: animation_states,
 		}
 	}
 }
@@ -347,6 +364,25 @@ pub enum ExplosionKind
 {
 	Small,
 	Big,
+	Energy,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum ItemKind
+{
+	Energy,
+}
+
+impl ItemKind
+{
+	pub fn from_str(s: &str) -> Option<Self>
+	{
+		match s
+		{
+			"energy" => Some(Self::Energy),
+			_ => None,
+		}
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -378,6 +414,14 @@ pub enum Effect
 	DelayedDeath
 	{
 		delay: f64,
+	},
+	PickupRecovery
+	{
+		amount: f32,
+	},
+	SpawnItem
+	{
+		spawn_table: Vec<(f32, ItemKind)>,
 	},
 }
 
