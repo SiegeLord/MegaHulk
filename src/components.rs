@@ -301,6 +301,8 @@ pub struct Health
 	pub remove_on_death: bool,
 	pub death_effects: Vec<Effect>,
 	pub damaged_by: Option<hecs::Entity>,
+	pub recovery: f32,
+	pub max_recovery: f32,
 }
 
 impl Health
@@ -314,6 +316,8 @@ impl Health
 			remove_on_death: true,
 			death_effects: vec![],
 			damaged_by: None,
+			recovery: 0.,
+			max_recovery: max_health / 2.,
 		}
 	}
 }

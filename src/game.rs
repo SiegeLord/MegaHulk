@@ -2164,6 +2164,14 @@ impl Map
 		// Health.
 		for (id, health) in self.world.query::<&mut comps::Health>().iter()
 		{
+			if health.recovery > 0. && health.health < health.max_health
+			{
+				let amt = (health.max_health - health.health)
+					.min(DT * 5.)
+					.min(health.recovery);
+				health.health += amt;
+				health.recovery -= amt;
+			}
 			if health.health <= 0.0 && !health.dead
 			{
 				health.dead = true;
@@ -2924,6 +2932,18 @@ impl Map
 				let cx = bw / 2.;
 				let _cy = bh / 2.;
 
+				let f = health.recovery / health.max_recovery;
+				let delta_theta = 2. / 3. * PI * f;
+				state.hs.prim.draw_arc(
+					cx - 64.,
+					bh - 64.,
+					22.,
+					2. / 3. * PI,
+					delta_theta,
+					Color::from_rgb_f(0.5, 0.5, 0.8),
+					8.,
+				);
+
 				let f = health.health / health.max_health;
 				let delta_theta = 2. / 3. * PI * f;
 				state.hs.prim.draw_arc(
@@ -2939,13 +2959,26 @@ impl Map
 				let lh = state.hs.ui_font().get_line_height() as f32;
 				let percent = (f * 100.).round() as i32;
 				state.hs.core.draw_text(
-					state.hs.ui_font(),
+					state.hud_font(),
 					Color::from_rgb_f(0.6, 0.8, 0.9),
 					cx - 70.,
 					bh - 64. - lh / 2.,
 					FontAlign::Left,
 					&format!("{percent}"),
 				);
+
+				let percent = (health.recovery / health.max_health * 100.).round() as i32;
+				if percent > 0
+				{
+					state.hs.core.draw_text(
+						state.small_hud_font(),
+						Color::from_rgb_f(0.6, 0.8, 0.9),
+						cx - 70.,
+						bh - 64. - lh / 2. + 16.,
+						FontAlign::Left,
+						&format!("+{percent}"),
+					);
+				}
 
 				let f = 1.0
 					- (((state.hs.time - grippers.last_kill_time) / POWER_LEVEL_TIME) as f32)

@@ -101,7 +101,7 @@ impl game_loop::LoopState for LoopState
 			width,
 			height,
 		)?);
-		game_state.hs.resize_display()?;
+		game_state.resize_display().into_slhack()?;
 
 		//self.cur_screen = Some(Screen::Menu(menu::Menu::new(game_state).into_slhack()?));
 		self.cur_screen = Some(Screen::Game(game::Game::new(game_state).into_slhack()?));
@@ -110,7 +110,7 @@ impl game_loop::LoopState for LoopState
 
 	fn resize_display(&mut self) -> slhack::error::Result<()>
 	{
-		self.game_state.hs.resize_display()?;
+		self.game_state.resize_display().into_slhack()?;
 		match &mut self.cur_screen
 		{
 			Some(Screen::Menu(menu)) => menu.resize(&mut self.game_state),

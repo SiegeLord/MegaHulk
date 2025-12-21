@@ -142,7 +142,10 @@ pub fn new_game_controls() -> controls::Controls<Action>
 	);
 	action_to_inputs.insert(
 		Action::Enrage,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::Space)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::Space)),
+			None,
+		],
 	);
 
 	action_to_inputs.insert(
@@ -223,6 +226,9 @@ pub struct GameState
 	pub exploration_shader: Option<Shader>,
 	pub deferred_renderer: Option<deferred::DeferredRenderer>,
 
+	hud_font: Option<Font>,
+	small_hud_font: Option<Font>,
+
 	bitmaps: HashMap<String, Bitmap>,
 	sprites: HashMap<String, sprite::Sprite>,
 	scenes: HashMap<String, Scene>,
@@ -274,12 +280,25 @@ impl GameState
 			map_depth_shader: None,
 			deferred_renderer: None,
 			exploration_shader: None,
+			hud_font: None,
+			small_hud_font: None,
 			hs: hack_state,
 		})
 	}
 
 	pub fn resize_display(&mut self) -> Result<()>
 	{
+		self.hud_font = Some(utils::load_ttf_font(
+			&self.hs.ttf,
+			"data/Energon.ttf",
+			(-24.) as i32,
+		)?);
+		self.small_hud_font = Some(utils::load_ttf_font(
+			&self.hs.ttf,
+			"data/Energon.ttf",
+			(-16.) as i32,
+		)?);
+
 		self.hs.resize_display().map_err(Into::into)
 	}
 
@@ -359,6 +378,16 @@ impl GameState
 		let res = scene_fn(self, scene);
 		std::mem::swap(&mut dummy_scenes, &mut self.scenes);
 		res
+	}
+
+	pub fn hud_font(&self) -> &Font
+	{
+		self.hud_font.as_ref().unwrap()
+	}
+
+	pub fn small_hud_font(&self) -> &Font
+	{
+		self.small_hud_font.as_ref().unwrap()
 	}
 }
 
