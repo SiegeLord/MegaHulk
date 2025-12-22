@@ -783,3 +783,21 @@ impl NumberTracker
 		self.last_time = time;
 	}
 }
+
+#[derive(Debug, Clone)]
+pub struct Bob
+{
+	pub impulse: f32,
+	pub phase: f64,
+}
+
+impl Bob
+{
+	pub fn new(impulse: f32) -> Self
+	{
+		Self {
+			impulse: impulse,
+			phase: rand::rng().random_range(0.0..2.0 * std::f64::consts::PI),
+		}
+	}
+}

@@ -346,6 +346,7 @@ pub fn spawn_robot(
 			comps::Effect::AddToScore { amount: 1000 },
 			comps::Effect::RobotDestroyed,
 		]),
+		comps::Bob::new(0.001),
 	));
 
 	let rigid_body = RigidBodyBuilder::dynamic()
@@ -748,6 +749,7 @@ pub fn spawn_player(
 		health,
 		map_scene,
 		comps::Inventory::new(),
+		comps::Bob::new(0.01),
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -2418,6 +2420,17 @@ impl Map
 			{
 				attach_gripper_to_parent(gripper_id, &self.world, &mut self.physics);
 			}
+		}
+
+		// Bob.
+		for (_, (bob, physics)) in self.world.query::<(&comps::Bob, &comps::Physics)>().iter()
+		{
+			let body = &mut self.physics.rigid_body_set[physics.handle];
+			let (_, _, up) = get_dirs(*body.rotation());
+			body.apply_impulse(
+				bob.impulse * (5. * (state.hs.time + bob.phase)).sin() as f32 * up,
+				true,
+			);
 		}
 
 		// Physics -> position sync.
