@@ -5,11 +5,7 @@ Weapons
 
 Fix player collision
 
-Death + respawns
-
 Frac scale isn't updating
-
-
 
 Map
     Still some leakage through closed doors...

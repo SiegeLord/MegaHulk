@@ -3,7 +3,7 @@ use nalgebra::{Point3, Quaternion, Unit, Vector3};
 use rand::prelude::*;
 use rapier3d::dynamics::ImpulseJointHandle;
 use slhack::{scene, sprite};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Light
@@ -403,6 +403,19 @@ impl KeyKind
 	}
 }
 
+impl std::fmt::Display for KeyKind
+{
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+	{
+		match self
+		{
+			Self::Red => write!(f, "Red"),
+			Self::Yellow => write!(f, "Yellow"),
+			Self::Blue => write!(f, "Blue"),
+		}
+	}
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ItemKind
 {
@@ -430,6 +443,19 @@ impl ItemKind
 			}),
 			"gift" => Some(Self::Gift),
 			_ => None,
+		}
+	}
+}
+
+impl std::fmt::Display for ItemKind
+{
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+	{
+		match self
+		{
+			ItemKind::Energy => write!(f, "Energy"),
+			ItemKind::Gift => write!(f, "Gift"),
+			ItemKind::Key { kind } => write!(f, "{} Key", kind),
 		}
 	}
 }
@@ -473,6 +499,11 @@ pub enum Effect
 		spawn_table: Vec<(f32, ItemKind)>,
 	},
 	ReattachGripper,
+	AddToScore
+	{
+		amount: i32,
+	},
+	ClearGifts,
 }
 
 #[derive(Debug, Clone)]
@@ -690,8 +721,7 @@ impl Stats
 #[derive(Debug, Clone)]
 pub struct Inventory
 {
-	pub keys: HashSet<KeyKind>,
-	pub num_gifts: i32,
+	pub num_gifts: NumberTracker,
 }
 
 impl Inventory
@@ -699,8 +729,46 @@ impl Inventory
 	pub fn new() -> Self
 	{
 		Self {
-			keys: HashSet::new(),
-			num_gifts: 0,
+			num_gifts: NumberTracker::new(0),
 		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct NumberTracker
+{
+	pub value: i32,
+	pub last_change: i32,
+	pub last_time: f64,
+}
+
+impl NumberTracker
+{
+	pub fn new(value: i32) -> Self
+	{
+		Self {
+			value: value,
+			last_change: 0,
+			last_time: 0.0,
+		}
+	}
+
+	pub fn fadeout(&self, time: f64) -> f32
+	{
+		1. - ((time - self.last_time) / 2.).min(1.) as f32
+	}
+
+	pub fn add(&mut self, value: i32, time: f64)
+	{
+		self.value += value;
+		if self.fadeout(time) > 0.
+		{
+			self.last_change += value;
+		}
+		else
+		{
+			self.last_change = value;
+		}
+		self.last_time = time;
 	}
 }

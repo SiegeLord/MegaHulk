@@ -24,9 +24,10 @@ use rapier3d::geometry::{
 };
 use rapier3d::pipeline::{ActiveEvents, EventHandler, PhysicsPipeline, QueryFilter};
 use serde_derive::{Deserialize, Serialize};
+use slhack::utils::ColorExt;
 use slhack::{controls, scene, sprite, ui as slhack_ui};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f32::consts::PI;
 use std::sync::RwLock;
 
@@ -318,6 +319,7 @@ pub fn spawn_robot(
 			comps::Effect::SpawnItem {
 				spawn_table: vec![(0.5, comps::ItemKind::Energy)],
 			},
+			comps::Effect::AddToScore { amount: 1000 },
 		]),
 	));
 
@@ -698,6 +700,8 @@ pub fn spawn_player(
 			kind: comps::ExplosionKind::Small,
 		},
 		comps::Effect::DelayedDeath { delay: 3. },
+		comps::Effect::AddToScore { amount: -10000 },
+		comps::Effect::ClearGifts,
 	];
 
 	let entity = world.spawn((
@@ -1121,7 +1125,7 @@ struct LevelProperties
 {
 	level: hecs::Entity,
 	level_map: LevelMap,
-	player: hecs::Entity,
+	player_start: comps::Position,
 	num_gifts: i32,
 }
 
@@ -1187,7 +1191,7 @@ fn spawn_level(
 	}
 	world.insert_one(entity, comps::Physics::new(body_handle))?;
 
-	let mut player_spawn_fn = None;
+	let mut player_start = None;
 	let mut spawn_fns: Vec<
 		Box<
 			dyn FnOnce(
@@ -1220,9 +1224,7 @@ fn spawn_level(
 			{
 				if object.name == "PlayerStart"
 				{
-					player_spawn_fn = Some(move |physics, world, state| -> Result<hecs::Entity> {
-						spawn_player(pos, rot, physics, world, state)
-					});
+					player_start = Some(comps::Position::new(pos, rot));
 				}
 				else if object.name.starts_with("Door")
 				{
@@ -1313,14 +1315,7 @@ fn spawn_level(
 		}
 	}
 
-	let player = if let Some(player_spawn_fn) = player_spawn_fn
-	{
-		player_spawn_fn(physics, world, state)?
-	}
-	else
-	{
-		return Err(format!("No PlayerStart in {}", scene_name))?;
-	};
+	let player_start = player_start.ok_or_else(|| format!("No PlayerStart in {}", scene_name))?;
 
 	for spawn_fn in spawn_fns
 	{
@@ -1330,7 +1325,7 @@ fn spawn_level(
 	Ok(LevelProperties {
 		level: entity,
 		level_map: level_map,
-		player: player,
+		player_start: player_start,
 		num_gifts: num_gifts,
 	})
 }
@@ -1398,11 +1393,73 @@ fn make_rectangle(display: &mut Display, prim: &PrimitivesAddon) -> VertexBuffer
 	rect_vertex_buffer
 }
 
+#[derive(Copy, Clone, PartialEq)]
+enum MapState
+{
+	Interactive,
+	DeathCinematic,
+	ExitCinematic,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct LevelDesc
 {
 	scene: String,
 	name: String,
+}
+
+struct MessageTracker
+{
+	messages: Vec<(String, f64)>,
+}
+
+impl MessageTracker
+{
+	const TIMEOUT: f64 = 5.;
+
+	fn new() -> Self
+	{
+		Self { messages: vec![] }
+	}
+
+	fn add(&mut self, message: &str, time: f64)
+	{
+		self.messages.push((message.to_string(), time));
+		self.messages
+			.retain_mut(|(_, t)| (time - *t) < Self::TIMEOUT);
+	}
+
+	fn draw(&self, dx: f32, dy: f32, state: &mut game_state::GameState)
+	{
+		let lh = state.small_hud_font().get_line_height() as f32;
+		for (i, (message, t)) in self.messages.iter().rev().enumerate()
+		{
+			let f = 1. - ((state.hs.time - t) / Self::TIMEOUT).min(1.) as f32;
+			if f > 0.
+			{
+				let fade = (f / 0.8).min(1.);
+				let flash = (f - 0.8) / 0.2;
+				let flash = if flash > 0.
+				{
+					0.5 + 0.5 * (flash * 6. * 2. * PI).sin()
+				}
+				else
+				{
+					0.
+				};
+
+				state.hs.core.draw_text(
+					state.small_hud_font(),
+					Color::from_rgba_f(fade * 0.6, fade * 0.8, fade * 0.9, fade)
+						.interpolate_gamma(Color::from_rgb_f(1., 1., 1.), flash),
+					dx,
+					dy + lh * (i as f32) + 2.,
+					FontAlign::Centre,
+					message,
+				);
+			}
+		}
+	}
 }
 
 struct Map
@@ -1411,8 +1468,8 @@ struct Map
 	physics: Physics,
 	camera_target: comps::Position,
 	camera: hecs::Entity,
+	player_start: comps::Position,
 	player: hecs::Entity,
-	accept_input: bool,
 	level: hecs::Entity,
 	delayed_effects: Vec<(comps::Effect, hecs::Entity, Option<hecs::Entity>)>,
 	show_map: bool,
@@ -1422,6 +1479,10 @@ struct Map
 	num_gifts: i32,
 	damage_rectangle: VertexBuffer<Vertex>,
 	level_desc: LevelDesc,
+	keys: HashSet<comps::KeyKind>,
+	score: comps::NumberTracker,
+	map_state: MapState,
+	messages: MessageTracker,
 }
 
 impl Map
@@ -1444,20 +1505,26 @@ impl Map
 		let LevelProperties {
 			level,
 			level_map,
-			player,
+			player_start,
 			num_gifts,
 		} = spawn_level(&level_desc.scene, &mut physics, &mut world, state)?;
+		let player = spawn_player(
+			player_start.pos,
+			player_start.rot,
+			&mut physics,
+			&mut world,
+			state,
+		)?;
 
-		let player_position = { (*world.get::<&comps::Position>(player)?).clone() };
 		let map_rot =
-			UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -PI / 2.) * player_position.rot;
+			UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -PI / 2.) * player_start.rot;
 
 		Ok(Self {
 			world: world,
 			physics: physics,
-			camera_target: player_position,
+			camera_target: player_start,
+			player_start: player_start,
 			player: player,
-			accept_input: true,
 			camera: player,
 			level: level,
 			delayed_effects: vec![],
@@ -1468,6 +1535,10 @@ impl Map
 			num_gifts: num_gifts,
 			damage_rectangle: make_rectangle(state.hs.display.as_mut().unwrap(), &state.hs.prim),
 			level_desc: level_desc,
+			keys: HashSet::new(),
+			score: comps::NumberTracker::new(0),
+			map_state: MapState::Interactive,
+			messages: MessageTracker::new(),
 		})
 	}
 
@@ -1543,7 +1614,7 @@ impl Map
 				controller.want_move = Vector3::zeros();
 				controller.want_rotate = Vector3::zeros();
 			}
-			else if self.accept_input
+			else if self.map_state == MapState::Interactive
 			{
 				controller.want_move = Vector3::new(right_left, up_down, 0.);
 				controller.want_rotate = Vector3::new(-rot_up_down, -rot_right_left, 0.);
@@ -1697,6 +1768,26 @@ impl Map
 				self.level_map.dirty = true;
 			}
 		}
+		else
+		{
+			for action in [game_state::Action::GripLeft, game_state::Action::GripRight]
+			{
+				if state.controls.get_action_state(action) > 0.5
+				{
+					self.player = spawn_player(
+						self.player_start.pos,
+						self.player_start.rot,
+						&mut self.physics,
+						&mut self.world,
+						state,
+					)?;
+					self.camera = self.player;
+					self.map_state = MapState::Interactive;
+					state.controls.clear_action_state(action);
+					break;
+				}
+			}
+		}
 		if let Ok(position) = self.world.get::<&comps::Position>(self.camera)
 		{
 			self.camera_target.pos = position.pos;
@@ -1708,7 +1799,8 @@ impl Map
 			state.controls.clear_action_state(game_state::Action::Pause);
 			state.hs.paused = !state.hs.paused;
 		}
-		if state.controls.get_action_state(game_state::Action::Map) > 0.5 && self.accept_input
+		if state.controls.get_action_state(game_state::Action::Map) > 0.5
+			&& self.map_state == MapState::Interactive
 		{
 			state.controls.clear_action_state(game_state::Action::Map);
 			self.show_map = !self.show_map;
@@ -2576,10 +2668,9 @@ impl Map
 									{
 										other_id = gripper.parent;
 									}
-									if let Ok(inventory) =
-										self.world.get::<&comps::Inventory>(other_id)
+									if self.player == other_id
 									{
-										do_open = inventory.keys.contains(&key);
+										do_open = self.keys.contains(&key);
 									}
 								}
 								if !do_open
@@ -2658,7 +2749,7 @@ impl Map
 						{
 							controller.force_attach = true;
 						}
-						self.accept_input = false;
+						self.map_state = MapState::ExitCinematic;
 					}
 					comps::Effect::OpenExit =>
 					{
@@ -2677,7 +2768,8 @@ impl Map
 					}
 					comps::Effect::SpawnDeathCamera =>
 					{
-						self.accept_input = false;
+						self.messages.add("Hulk destroyed!", state.hs.time);
+						self.map_state = MapState::DeathCinematic;
 						self.show_map = false;
 						let mut src_pos = None;
 						if let Ok(position) = self.world.get::<&comps::Position>(id)
@@ -2703,6 +2795,8 @@ impl Map
 					{
 						if let Some(other_id) = other_id
 						{
+							self.messages
+								.add(&format!("Got {}", kind.to_string()), state.hs.time);
 							if other_id == self.player
 							{
 								match kind
@@ -2718,18 +2812,15 @@ impl Map
 									}
 									comps::ItemKind::Key { kind } =>
 									{
-										if let Ok(mut inventory) =
-											self.world.get::<&mut comps::Inventory>(self.player)
-										{
-											inventory.keys.insert(kind);
-										}
+										self.keys.insert(kind);
 									}
 									comps::ItemKind::Gift =>
 									{
 										if let Ok(mut inventory) =
 											self.world.get::<&mut comps::Inventory>(self.player)
 										{
-											inventory.num_gifts += 1;
+											inventory.num_gifts.add(1, state.hs.time);
+											self.score.add(5000, state.hs.time);
 										}
 									}
 								}
@@ -2785,9 +2876,20 @@ impl Map
 							attach_gripper_to_parent(id, &self.world, &mut self.physics);
 						}
 					}
+					comps::Effect::AddToScore { amount } =>
+					{
+						self.score.add(amount, state.hs.time);
+					}
+					comps::Effect::ClearGifts =>
+					{
+						if let Ok(mut inventory) = self.world.get::<&mut comps::Inventory>(id)
+						{
+							let num_gifts = inventory.num_gifts.value;
+							inventory.num_gifts.add(-num_gifts, state.hs.time);
+						}
+					}
 				}
 			}
-
 			effects = new_effects;
 		}
 
@@ -3284,14 +3386,14 @@ impl Map
 		let bw = state.hs.buffer_width();
 		let bh = state.hs.buffer_height();
 		let cx = bw / 2.;
-		let lh = state.hs.ui_font().get_line_height() as f32;
+		let lh = state.hud_font().get_line_height() as f32;
+		let small_lh = state.small_hud_font().get_line_height() as f32;
 
-		if self.world.contains(self.player) && self.accept_input
+		if self.world.contains(self.player) && self.map_state == MapState::Interactive
 		{
 			let position = self.world.get::<&comps::Position>(self.player).unwrap();
 			let health = self.world.get::<&comps::Health>(self.player).unwrap();
 			let grippers = self.world.get::<&comps::Grippers>(self.player).unwrap();
-			let inventory = self.world.get::<&comps::Inventory>(self.player).unwrap();
 			if !health.dead
 			{
 				if !self.show_map
@@ -3301,10 +3403,10 @@ impl Map
 					state.hs.prim.draw_arc(
 						cx - 64.,
 						bh - 64.,
-						22.,
+						24.,
 						2. / 3. * PI,
 						delta_theta,
-						Color::from_rgb_f(0.5, 0.5, 0.8),
+						Color::from_rgb_f(0.7, 0.7, 0.9),
 						8.,
 					);
 
@@ -3335,7 +3437,7 @@ impl Map
 					{
 						state.hs.core.draw_text(
 							state.small_hud_font(),
-							Color::from_rgb_f(0.6, 0.8, 0.9),
+							Color::from_rgb_f(0.7, 0.7, 0.9),
 							cx - 70.,
 							bh - 64. - lh / 2. + 16.,
 							FontAlign::Left,
@@ -3377,27 +3479,6 @@ impl Map
 					);
 				}
 
-				let hud_gift = state.get_bitmap("data/hud_gift.png")?;
-				let hud_gift_w = hud_gift.get_width() as f32;
-				let hud_gift_h = hud_gift.get_height() as f32;
-
-				state.hs.core.draw_tinted_bitmap(
-					hud_gift,
-					Color::from_rgb_f(1., 1., 1.),
-					32. - hud_gift_w / 2.,
-					16. + lh / 2. - hud_gift_h / 2.,
-					Flag::zero(),
-				);
-
-				state.hs.core.draw_text(
-					state.hud_font(),
-					Color::from_rgb_f(0.6, 0.8, 0.9),
-					36.,
-					16.,
-					FontAlign::Left,
-					&format!("{:>2}/{:}", inventory.num_gifts, self.num_gifts),
-				);
-
 				let hud_key = state.get_bitmap("data/hud_key.png")?;
 				let hud_key_w = hud_key.get_width() as f32;
 				let hud_key_h = hud_key.get_height() as f32;
@@ -3410,13 +3491,13 @@ impl Map
 				.iter()
 				.enumerate()
 				{
-					if inventory.keys.contains(key)
+					if self.keys.contains(key)
 					{
 						state.hs.core.draw_tinted_bitmap(
 							hud_key,
 							key.color(),
-							bw - 64. - hud_key_w + 24. * i as f32,
-							32. - hud_key_h,
+							cx - 24. - hud_key_w / 2. + 24. * i as f32,
+							bh - 80. - hud_key_h,
 							Flag::zero(),
 						);
 					}
@@ -3493,14 +3574,78 @@ impl Map
 					4,
 					PrimType::TriangleFan,
 				);
+				state.hs.core.use_transform(&Transform::identity());
+				state
+					.hs
+					.core
+					.set_shader_uniform(
+						"tint",
+						&[color_to_array(Color::from_rgb_f(1., 1., 1.))][..],
+					)
+					.ok();
 			}
 		}
-		state.hs.core.use_transform(&Transform::identity());
-		state
-			.hs
-			.core
-			.set_shader_uniform("tint", &[color_to_array(Color::from_rgb_f(1., 1., 1.))][..])
-			.ok();
+
+		if self.world.contains(self.player) && self.map_state != MapState::ExitCinematic
+		{
+			let inventory = self.world.get::<&comps::Inventory>(self.player).unwrap();
+			let hud_gift = state.get_bitmap("data/hud_gift.png")?;
+			let hud_gift_w = hud_gift.get_width() as f32;
+			let hud_gift_h = hud_gift.get_height() as f32;
+
+			state.hs.core.draw_tinted_bitmap(
+				hud_gift,
+				Color::from_rgb_f(1., 1., 1.),
+				32. - hud_gift_w / 2.,
+				16. + small_lh / 2. - hud_gift_h / 2.,
+				Flag::zero(),
+			);
+
+			state.hs.core.draw_text(
+				state.small_hud_font(),
+				Color::from_rgb_f(0.6, 0.8, 0.9),
+				32. + 4. + hud_gift_w / 2.,
+				16.,
+				FontAlign::Left,
+				&format!("{:>2}/{:}", inventory.num_gifts.value, self.num_gifts),
+			);
+			if inventory.num_gifts.last_change != 0
+			{
+				let f = self.score.fadeout(state.hs.time);
+				state.hs.core.draw_text(
+					state.small_hud_font(),
+					Color::from_rgba_f(f * 0.6, f * 0.8, f * 0.9, f),
+					32. + 4. + hud_gift_w / 2.,
+					16. + 4. + small_lh,
+					FontAlign::Left,
+					&format!("{:+}", inventory.num_gifts.last_change),
+				);
+			}
+
+			state.hs.core.draw_text(
+				state.small_hud_font(),
+				Color::from_rgb_f(0.6, 0.8, 0.9),
+				bw - 192.,
+				16.,
+				FontAlign::Left,
+				&format!("Score: {}", self.score.value),
+			);
+			if self.score.last_change != 0
+			{
+				let f = self.score.fadeout(state.hs.time);
+				state.hs.core.draw_text(
+					state.small_hud_font(),
+					Color::from_rgba_f(f * 0.6, f * 0.8, f * 0.9, f),
+					bw - 192. + state.small_hud_font().get_text_width("Score:") as f32,
+					16. + 2. + small_lh,
+					FontAlign::Left,
+					&format!("{:+}", self.score.last_change),
+				);
+			}
+
+			self.messages.draw(cx, 16., state);
+		}
+
 		if self.show_map
 		{
 			state.hs.core.draw_text(
