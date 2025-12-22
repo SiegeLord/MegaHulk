@@ -185,6 +185,7 @@ impl Game
 {
 	pub fn new(state: &mut game_state::GameState) -> Result<Self>
 	{
+		state.controls.clear_action_states();
 		Ok(Self {
 			map: Map::new(state)?,
 			subscreens: ui::SubScreens::new(state),
@@ -248,6 +249,7 @@ impl Game
 			}
 			if in_game_menu
 			{
+				state.hs.hide_mouse = false;
 				self.subscreens
 					.push(ui::SubScreen::InGameMenu(ui::InGameMenu::new(state)));
 				self.subscreens.reset_transition(state);
@@ -280,6 +282,25 @@ impl Game
 	{
 		if !self.subscreens.is_empty()
 		{
+			// TODO: Why do I need to set these?
+			state.hs.core.set_target_bitmap(Some(state.hs.buffer1()));
+			state
+				.hs
+				.core
+				.use_shader(Some(state.basic_shader.as_ref().unwrap()))
+				.unwrap();
+			state
+				.hs
+				.core
+				.set_blender(BlendOperation::Add, BlendMode::One, BlendMode::InverseAlpha);
+			state
+				.hs
+				.core
+				.set_shader_uniform(
+					"tint",
+					&[crate::game::color_to_array(Color::from_rgb_f(1., 1., 1.))][..],
+				)
+				.ok();
 			state
 				.hs
 				.core
@@ -423,7 +444,7 @@ pub fn spawn_player_exit_track(
 			scene_name,
 			obj_idx as i32,
 			scene::AnimationState::new("Play", true),
-			&[comps::Effect::ExitMap],
+			&[],
 		),
 		comps::PositionCopier { target },
 	));
@@ -718,9 +739,12 @@ pub fn spawn_player(
 		comps::Controller::new(),
 		comps::Scene::new(scene_name),
 		comps::Stats::new(comps::StatValues::new_player()),
-		comps::OnDeathEffects::new(&[comps::Effect::SpawnExplosion {
-			kind: comps::ExplosionKind::Big,
-		}]),
+		comps::OnDeathEffects::new(&[
+			comps::Effect::SpawnExplosion {
+				kind: comps::ExplosionKind::Big,
+			},
+			comps::Effect::AllowCinematicSkip,
+		]),
 		health,
 		map_scene,
 		comps::Inventory::new(),
@@ -1408,7 +1432,7 @@ enum MapState
 	Interactive,
 	DeathCinematic,
 	ExitCinematic,
-	MineExploded,
+	MineExplosionCinematic,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1536,6 +1560,7 @@ struct Map
 	start_time: f64,
 	self_destruct_start: Option<f64>,
 	next_self_destruct_message: f64,
+	allow_cinematic_skip: bool,
 }
 
 impl Map
@@ -1596,6 +1621,7 @@ impl Map
 			start_time: state.hs.time,
 			self_destruct_start: None,
 			next_self_destruct_message: 0.,
+			allow_cinematic_skip: false,
 		})
 	}
 
@@ -1608,8 +1634,6 @@ impl Map
 			Box<dyn FnOnce(&mut Map, &mut game_state::GameState) -> Result<hecs::Entity>>,
 		> = vec![];
 		std::mem::swap(&mut self.delayed_effects, &mut effects);
-
-		//effects.push((comps::Effect::ExitMap, self.player, None));
 
 		// Position snapshotting.
 		for (_, position) in self.world.query::<&mut comps::Position>().iter()
@@ -1827,32 +1851,64 @@ impl Map
 				self.level_map.dirty = true;
 			}
 		}
-		else
+		if self.map_state != MapState::Interactive
 		{
+			if !self.allow_cinematic_skip
+			{
+				state.controls.clear_action_states();
+			}
 			for action in [game_state::Action::GripLeft, game_state::Action::GripRight]
 			{
 				if state.controls.get_action_state(action) > 0.5
 				{
 					state.controls.clear_action_state(action);
-					if self.map_state == MapState::MineExploded
+					match self.map_state
 					{
-						state.hs.menu_controls.clear_action_states();
-						return Ok(Some(game_state::NextScreen::Menu {
-							ignore_first_mouse_up: true,
-						}));
-					}
-					else
-					{
-						self.player = spawn_player(
-							self.player_start.pos,
-							self.player_start.rot,
-							&mut self.physics,
-							&mut self.world,
-							state,
-						)?;
-						self.camera = self.player;
-						self.map_state = MapState::Interactive;
-						break;
+						MapState::ExitCinematic =>
+						{
+							let mut bonus = 0;
+
+							if self.stats.deaths == 0
+							{
+								bonus += 25000;
+							}
+							if self.stats.gifts_found - self.stats.gifts_lost == self.num_gifts
+							{
+								bonus += 2000 * self.num_gifts;
+							}
+
+							self.stats.score = self.score.value + bonus;
+							self.stats.bonus = bonus;
+							self.stats.time = state.hs.time - self.start_time;
+							state.next_level_desc = Some(self.level_desc.next.clone());
+							return Ok(Some(game_state::NextScreen::Intermission {
+								map_stats: self.stats.clone(),
+							}));
+						}
+						MapState::MineExplosionCinematic =>
+						{
+							state.hs.menu_controls.clear_action_states();
+							return Ok(Some(game_state::NextScreen::Menu {
+								ignore_first_mouse_up: true,
+							}));
+						}
+						MapState::DeathCinematic =>
+						{
+							self.player = spawn_player(
+								self.player_start.pos,
+								self.player_start.rot,
+								&mut self.physics,
+								&mut self.world,
+								state,
+							)?;
+							self.camera = self.player;
+							self.map_state = MapState::Interactive;
+							self.allow_cinematic_skip = false;
+						}
+						MapState::Interactive =>
+						{
+							unreachable!()
+						}
 					}
 				}
 			}
@@ -2781,25 +2837,38 @@ impl Map
 							.unwrap();
 						if let Some((door, scene, physics)) = query.get()
 						{
-							if door.open_on_exit && other_id.is_some()
+							let actor_id = other_id.and_then(|other_id| {
+								self.world
+									.get::<&comps::Gripper>(other_id)
+									.map(|gripper| gripper.parent)
+									.ok()
+									.or_else(|| Some(other_id))
+							});
+							if door.open_on_exit && actor_id.is_some()
 							{
+								if actor_id == Some(self.player)
+								{
+									self.messages.add("This door is locked.", state.hs.time);
+								}
 								// Don't open on touch.
 								continue;
 							}
 							if let Some(key) = door.key
 							{
 								let mut do_open = false;
-								if let Some(mut other_id) = other_id
+								if actor_id == Some(self.player)
 								{
-									if let Ok(gripper) = self.world.get::<&comps::Gripper>(other_id)
+									if self.keys.contains(&key)
 									{
-										other_id = gripper.parent;
+										do_open = true;
 									}
-									if self.player == other_id
+									else
 									{
-										do_open = self.keys.contains(&key);
+										self.messages
+											.add(&format!("{} key required!", key), state.hs.time);
 									}
 								}
+								// Robot or player without key.
 								if !do_open
 								{
 									continue;
@@ -2809,7 +2878,7 @@ impl Map
 							let mut can_open = true;
 							for animation_state in scene.animation_states.values()
 							{
-								can_open = animation_state.state.get_num_loops() != 0;
+								can_open = animation_state.state.is_done();
 							}
 
 							if can_open
@@ -2868,7 +2937,12 @@ impl Map
 						self.camera = spawn_exit_camera(
 							&self.level_desc.scene,
 							"ExitCamera",
-							&[],
+							&[
+								comps::Effect::AllowCinematicSkip,
+								comps::Effect::SendMessage {
+									message: format!("Got out in time!"),
+								},
+							],
 							&mut self.world,
 							state,
 						)?;
@@ -2906,7 +2980,7 @@ impl Map
 						if let Some(self_destruct_start) = self.self_destruct_start
 							&& (SELF_DESTRUCT_TIME - (state.hs.time - self_destruct_start)) < 0.
 						{
-							self.map_state = MapState::MineExploded;
+							self.map_state = MapState::MineExplosionCinematic;
 							spawn_exit_explosions(
 								&self.level_desc.scene,
 								"ExitExplosions",
@@ -2916,9 +2990,12 @@ impl Map
 							self.camera = spawn_exit_camera(
 								&self.level_desc.scene,
 								"ExitCamera",
-								&[comps::Effect::SendMessage {
-									message: format!("You failed to get out in time!"),
-								}],
+								&[
+									comps::Effect::AllowCinematicSkip,
+									comps::Effect::SendMessage {
+										message: format!("Failed to get out in time!"),
+									},
+								],
 								&mut self.world,
 								state,
 							)?;
@@ -2953,10 +3030,10 @@ impl Map
 					{
 						if let Some(other_id) = other_id
 						{
-							self.messages
-								.add(&format!("Got {}", kind.to_string()), state.hs.time);
 							if other_id == self.player
 							{
+								self.messages
+									.add(&format!("Got {}", kind.to_string()), state.hs.time);
 								match kind
 								{
 									comps::ItemKind::Energy =>
@@ -3050,27 +3127,6 @@ impl Map
 					}
 					comps::Effect::EjectInventory =>
 					{}
-					comps::Effect::ExitMap =>
-					{
-						let mut bonus = 0;
-
-						if self.stats.deaths == 0
-						{
-							bonus += 25000;
-						}
-						if self.stats.gifts_found - self.stats.gifts_lost == self.num_gifts
-						{
-							bonus += 2000 * self.num_gifts;
-						}
-
-						self.stats.score = self.score.value + bonus;
-						self.stats.bonus = bonus;
-						self.stats.time = state.hs.time - self.start_time;
-						state.next_level_desc = Some(self.level_desc.next.clone());
-						return Ok(Some(game_state::NextScreen::Intermission {
-							map_stats: self.stats.clone(),
-						}));
-					}
 					comps::Effect::RobotDestroyed =>
 					{
 						self.stats.robots_destroyed += 1;
@@ -3078,6 +3134,10 @@ impl Map
 					comps::Effect::SendMessage { message } =>
 					{
 						self.messages.add(&message, state.hs.time);
+					}
+					comps::Effect::AllowCinematicSkip =>
+					{
+						self.allow_cinematic_skip = true;
 					}
 				}
 			}

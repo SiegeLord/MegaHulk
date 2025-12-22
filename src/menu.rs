@@ -19,7 +19,7 @@ impl Menu
 	pub fn new(ignore_first_mouse_up: bool, state: &mut game_state::GameState) -> Result<Self>
 	{
 		state.hs.paused = false;
-		state.hs.hide_mouse = true;
+		state.hs.hide_mouse = false;
 		state.sfx.cache_sample("data/ui1.ogg")?;
 		state.sfx.cache_sample("data/ui2.ogg")?;
 		state.cache_sprite("data/title.cfg")?;
@@ -72,6 +72,26 @@ impl Menu
 
 	pub fn draw(&mut self, state: &game_state::GameState) -> Result<()>
 	{
+		// TODO: Why do I need to set these?
+		state.hs.core.set_target_bitmap(Some(state.hs.buffer1()));
+		state
+			.hs
+			.core
+			.use_shader(Some(state.basic_shader.as_ref().unwrap()))
+			.unwrap();
+		state
+			.hs
+			.core
+			.set_blender(BlendOperation::Add, BlendMode::One, BlendMode::InverseAlpha);
+		state
+			.hs
+			.core
+			.set_shader_uniform(
+				"tint",
+				&[crate::game::color_to_array(Color::from_rgb_f(1., 1., 1.))][..],
+			)
+			.ok();
+
 		state.hs.core.clear_to_color(Color::from_rgb_f(0., 0., 0.5));
 		self.subscreens.draw(state);
 

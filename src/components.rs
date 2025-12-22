@@ -506,12 +506,12 @@ pub enum Effect
 	},
 	ClearGifts,
 	EjectInventory,
-	ExitMap,
 	RobotDestroyed,
 	SendMessage
 	{
 		message: String,
 	},
+	AllowCinematicSkip,
 }
 
 #[derive(Debug, Clone)]
