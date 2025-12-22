@@ -8,6 +8,7 @@ mod components;
 mod error;
 mod game;
 mod game_state;
+mod intermission;
 mod menu;
 mod ui;
 
@@ -20,6 +21,7 @@ pub enum Screen
 {
 	Game(game::Game),
 	Menu(menu::Menu),
+	Intermission(intermission::Intermission),
 }
 
 pub struct LoopState
@@ -103,6 +105,7 @@ impl game_loop::LoopState for LoopState
 		)?);
 		game_state.resize_display().into_slhack()?;
 
+		game_state.next_level_desc = Some("data/test_level.cfg".to_string());
 		//self.cur_screen = Some(Screen::Menu(menu::Menu::new(game_state).into_slhack()?));
 		self.cur_screen = Some(Screen::Game(game::Game::new(game_state).into_slhack()?));
 		Ok(())
@@ -115,6 +118,7 @@ impl game_loop::LoopState for LoopState
 		{
 			Some(Screen::Menu(menu)) => menu.resize(&mut self.game_state),
 			Some(Screen::Game(game)) => game.resize(&mut self.game_state),
+			Some(Screen::Intermission(inter)) => inter.resize(&mut self.game_state),
 			_ => (),
 		}
 		Ok(())
@@ -126,6 +130,7 @@ impl game_loop::LoopState for LoopState
 		{
 			Some(Screen::Menu(menu)) => menu.draw(&mut self.game_state),
 			Some(Screen::Game(game)) => game.draw(&mut self.game_state),
+			Some(Screen::Intermission(inter)) => inter.draw(&mut self.game_state),
 			_ => Ok(()),
 		}
 		.into_slhack()
@@ -138,6 +143,7 @@ impl game_loop::LoopState for LoopState
 		{
 			Some(Screen::Menu(menu)) => menu.input(event, &mut self.game_state),
 			Some(Screen::Game(game)) => game.input(event, &mut self.game_state),
+			Some(Screen::Intermission(inter)) => inter.input(event, &mut self.game_state),
 			_ => Ok(None),
 		}
 		.into_slhack()?;
@@ -172,6 +178,13 @@ impl game_loop::LoopState for LoopState
 			{
 				self.cur_screen = Some(Screen::Menu(
 					menu::Menu::new(&mut self.game_state).into_slhack()?,
+				))
+			}
+			Some(game_state::NextScreen::Intermission { ref map_stats }) =>
+			{
+				self.cur_screen = Some(Screen::Intermission(
+					intermission::Intermission::new(&map_stats, &mut self.game_state)
+						.into_slhack()?,
 				))
 			}
 			Some(game_state::NextScreen::Quit) => self.cur_screen = None,

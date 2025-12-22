@@ -39,7 +39,7 @@ const SMALL_GROUP: Group = Group::GROUP_4;
 const POWER_LEVEL_TIME: f64 = 10.0;
 const ENERGY_AMOUNT: f32 = 20.;
 
-fn color_to_array(color: Color) -> [f32; 4]
+pub fn color_to_array(color: Color) -> [f32; 4]
 {
 	// TODO: Put this into RustAllegro.
 	let (r, g, b, a) = color.to_rgba_f();
@@ -185,7 +185,7 @@ impl Game
 	pub fn new(state: &mut game_state::GameState) -> Result<Self>
 	{
 		Ok(Self {
-			map: Map::new("data/test_level.cfg", state)?,
+			map: Map::new(state)?,
 			subscreens: ui::SubScreens::new(state),
 		})
 	}
@@ -320,6 +320,7 @@ pub fn spawn_robot(
 				spawn_table: vec![(0.5, comps::ItemKind::Energy)],
 			},
 			comps::Effect::AddToScore { amount: 1000 },
+			comps::Effect::RobotDestroyed,
 		]),
 	));
 
@@ -418,6 +419,7 @@ pub fn spawn_player_exit_track(
 			scene_name,
 			obj_idx as i32,
 			scene::AnimationState::new("Play", true),
+			&[comps::Effect::ExitMap],
 		),
 		comps::PositionCopier { target },
 	));
@@ -443,13 +445,14 @@ pub fn spawn_exit_explosions(
 			scene_name,
 			obj_idx as i32,
 			scene::AnimationState::new("Play", true),
+			&[],
 		),
 		comps::ExplosionSpawner::new(comps::ExplosionKind::Big),
 	));
 	Ok(entity)
 }
 
-pub fn spawn_animated_target(
+pub fn spawn_exit_camera(
 	scene_name: &str, obj_name: &str, world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
@@ -468,6 +471,7 @@ pub fn spawn_animated_target(
 			scene_name,
 			obj_idx as i32,
 			scene::AnimationState::new("Play", true),
+			&[],
 		),
 	));
 	Ok(entity)
@@ -1401,11 +1405,12 @@ enum MapState
 	ExitCinematic,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-struct LevelDesc
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LevelDesc
 {
-	scene: String,
-	name: String,
+	pub scene: String,
+	pub name: String,
+	pub next: String,
 }
 
 struct MessageTracker
@@ -1462,6 +1467,44 @@ impl MessageTracker
 	}
 }
 
+#[derive(Clone, Debug)]
+pub struct MapStats
+{
+	pub level_desc: LevelDesc,
+
+	pub score: i32,
+	pub bonus: i32,
+
+	pub time: f64,
+	pub gifts_found: i32,
+	pub gifts_lost: i32,
+	pub robots_destroyed: i32,
+	pub deaths: i32,
+	pub max_speed: f32,
+	pub max_power_level: f32,
+	pub max_rel_speed: f32,
+}
+
+impl MapStats
+{
+	pub fn new(level_desc: &LevelDesc) -> Self
+	{
+		Self {
+			level_desc: level_desc.clone(),
+			bonus: 0,
+			time: 0.,
+			score: 0,
+			gifts_found: 0,
+			gifts_lost: 0,
+			robots_destroyed: 0,
+			deaths: 0,
+			max_speed: 0.0,
+			max_power_level: 0.,
+			max_rel_speed: 0.,
+		}
+	}
+}
+
 struct Map
 {
 	world: hecs::World,
@@ -1483,13 +1526,15 @@ struct Map
 	score: comps::NumberTracker,
 	map_state: MapState,
 	messages: MessageTracker,
+	stats: MapStats,
+	start_time: f64,
 }
 
 impl Map
 {
-	fn new(level_desc: &str, state: &mut game_state::GameState) -> Result<Self>
+	fn new(state: &mut game_state::GameState) -> Result<Self>
 	{
-		let level_desc: LevelDesc = utils::load_config(level_desc)?;
+		let level_desc: LevelDesc = utils::load_config(state.next_level_desc.as_ref().unwrap())?;
 
 		let mut world = hecs::World::new();
 
@@ -1534,11 +1579,13 @@ impl Map
 			level_map: level_map,
 			num_gifts: num_gifts,
 			damage_rectangle: make_rectangle(state.hs.display.as_mut().unwrap(), &state.hs.prim),
+			stats: MapStats::new(&level_desc),
 			level_desc: level_desc,
 			keys: HashSet::new(),
 			score: comps::NumberTracker::new(0),
 			map_state: MapState::Interactive,
 			messages: MessageTracker::new(),
+			start_time: state.hs.time,
 		})
 	}
 
@@ -1551,6 +1598,8 @@ impl Map
 			Box<dyn FnOnce(&mut Map, &mut game_state::GameState) -> Result<hecs::Entity>>,
 		> = vec![];
 		std::mem::swap(&mut self.delayed_effects, &mut effects);
+
+		//effects.push((comps::Effect::ExitMap, self.player, None));
 
 		// Position snapshotting.
 		for (_, position) in self.world.query::<&mut comps::Position>().iter()
@@ -2115,6 +2164,11 @@ impl Map
 										.unwrap();
 									let dir = (target_body.translation() - gripper_pos).normalize();
 									let rel_vel = (gripper_vel - target_physics.old_vel).dot(&dir);
+									if gripper.parent == self.player
+									{
+										self.stats.max_rel_speed =
+											self.stats.max_rel_speed.max(rel_vel);
+									}
 									effects.push((
 										comps::Effect::Damage {
 											amount: rel_vel.max(0.),
@@ -2183,6 +2237,10 @@ impl Map
 			)>()
 			.iter()
 		{
+			if id == self.player
+			{
+				self.stats.max_power_level = self.stats.max_power_level.max(grippers.power_level);
+			}
 			if let Ok(mut health) = self.world.get::<&mut comps::Health>(id)
 			{
 				if controller.want_enrage
@@ -2287,7 +2345,7 @@ impl Map
 		}
 
 		// Physics -> position sync.
-		for (_id, (position, physics)) in self
+		for (id, (position, physics)) in self
 			.world
 			.query::<(&mut comps::Position, &mut comps::Physics)>()
 			.iter()
@@ -2299,6 +2357,10 @@ impl Map
 				position.rot = *body.rotation();
 			}
 			physics.old_vel = *body.linvel();
+			if id == self.player
+			{
+				self.stats.max_speed = self.stats.max_speed.max(body.linvel().norm());
+			}
 		}
 
 		//  FaceTowards.
@@ -2440,7 +2502,7 @@ impl Map
 		}
 
 		// SceneObjectPosition.
-		for (_, (scene_object_position, position)) in self
+		for (id, (scene_object_position, position)) in self
 			.world
 			.query::<(&mut comps::SceneObjectPosition, &mut comps::Position)>()
 			.iter()
@@ -2449,6 +2511,13 @@ impl Map
 			let object = &scene.objects[scene_object_position.object_idx as usize];
 
 			object.advance_state(&mut scene_object_position.animation_state, DT as f64);
+			if scene_object_position.animation_state.get_num_loops() > 0
+			{
+				for effect in &scene_object_position.animation_end_effects
+				{
+					effects.push((effect.clone(), id, None));
+				}
+			}
 			let (pos, rot, scale) =
 				object.get_animation_position(&scene_object_position.animation_state);
 
@@ -2738,7 +2807,7 @@ impl Map
 							&mut self.world,
 							state,
 						)?;
-						self.camera = spawn_animated_target(
+						self.camera = spawn_exit_camera(
 							&self.level_desc.scene,
 							"ExitCamera",
 							&mut self.world,
@@ -2771,6 +2840,7 @@ impl Map
 						self.messages.add("Hulk destroyed!", state.hs.time);
 						self.map_state = MapState::DeathCinematic;
 						self.show_map = false;
+						self.stats.deaths += 1;
 						let mut src_pos = None;
 						if let Ok(position) = self.world.get::<&comps::Position>(id)
 						{
@@ -2819,6 +2889,7 @@ impl Map
 										if let Ok(mut inventory) =
 											self.world.get::<&mut comps::Inventory>(self.player)
 										{
+											self.stats.gifts_found += 1;
 											inventory.num_gifts.add(1, state.hs.time);
 											self.score.add(5000, state.hs.time);
 										}
@@ -2885,8 +2956,36 @@ impl Map
 						if let Ok(mut inventory) = self.world.get::<&mut comps::Inventory>(id)
 						{
 							let num_gifts = inventory.num_gifts.value;
+							self.stats.gifts_lost += 1;
 							inventory.num_gifts.add(-num_gifts, state.hs.time);
 						}
+					}
+					comps::Effect::EjectInventory =>
+					{}
+					comps::Effect::ExitMap =>
+					{
+						let mut bonus = 0;
+
+						if self.stats.deaths == 0
+						{
+							bonus += 25000;
+						}
+						if self.stats.gifts_found - self.stats.gifts_lost == self.num_gifts
+						{
+							bonus += 2000 * self.num_gifts;
+						}
+
+						self.stats.score = self.score.value + bonus;
+						self.stats.bonus = bonus;
+						self.stats.time = state.hs.time - self.start_time;
+						state.next_level_desc = Some(self.level_desc.next.clone());
+						return Ok(Some(game_state::NextScreen::Intermission {
+							map_stats: self.stats.clone(),
+						}));
+					}
+					comps::Effect::RobotDestroyed =>
+					{
+						self.stats.robots_destroyed += 1;
 					}
 				}
 			}

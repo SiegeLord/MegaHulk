@@ -504,6 +504,9 @@ pub enum Effect
 		amount: i32,
 	},
 	ClearGifts,
+	EjectInventory,
+	ExitMap,
+	RobotDestroyed,
 }
 
 #[derive(Debug, Clone)]
@@ -591,18 +594,21 @@ pub struct SceneObjectPosition
 	pub scene_name: String,
 	pub object_idx: i32,
 	pub animation_state: slhack::scene::AnimationState,
+	pub animation_end_effects: Vec<Effect>,
 }
 
 impl SceneObjectPosition
 {
 	pub fn new(
 		scene_name: &str, object_idx: i32, animation_state: slhack::scene::AnimationState,
+		effects: &[Effect],
 	) -> Self
 	{
 		Self {
 			scene_name: scene_name.to_string(),
 			object_idx: object_idx,
 			animation_state: animation_state,
+			animation_end_effects: effects.to_vec(),
 		}
 	}
 }

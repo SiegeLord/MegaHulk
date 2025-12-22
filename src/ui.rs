@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::game::MapStats;
 use crate::{components, game, game_state, utils};
 
 use allegro::*;
@@ -19,6 +20,15 @@ pub const VERT_SPACE: f32 = 16.;
 const THEME: ui::Theme = ui::Theme {
 	unselected: Color::from_rgb_f(0.9, 0.9, 0.4),
 	label: Color::from_rgb_f(0.7 * 0.9, 0.7 * 0.9, 0.7 * 0.9),
+	selected: Color::from_rgb_f(1., 1., 1.),
+
+	horiz_space: 16.,
+	vert_space: 16.,
+};
+
+const THEME_LIGHT: ui::Theme = ui::Theme {
+	unselected: Color::from_rgb_f(0.9, 0.9, 0.4),
+	label: Color::from_rgb_f(0.9, 0.9, 0.9),
 	selected: Color::from_rgb_f(1., 1., 1.),
 
 	horiz_space: 16.,
@@ -730,5 +740,235 @@ impl SubScreens
 	pub fn is_empty(&self) -> bool
 	{
 		self.subscreens.is_empty()
+	}
+}
+
+fn mps_to_kph(mps: f32) -> f32
+{
+	mps / 1000. * 3600.
+}
+
+pub struct IntermissionMenu
+{
+	widgets: ui::WidgetList<Action>,
+}
+
+impl IntermissionMenu
+{
+	pub fn new(map_stats: &MapStats, state: &game_state::GameState) -> Result<Self>
+	{
+		let w = BUTTON_WIDTH;
+		let h = BUTTON_HEIGHT;
+
+		let mut widgets = vec![];
+
+		widgets.extend([
+			vec![ui::Widget::Label(ui::Label::new(
+				w,
+				h,
+				&format!("{} destroyed!", map_stats.level_desc.name),
+				THEME_LIGHT.clone(),
+			))],
+			vec![
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					"Score",
+					FontAlign::Right,
+					THEME.clone(),
+				)),
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					&format!("{}", map_stats.score),
+					FontAlign::Left,
+					THEME_LIGHT.clone(),
+				)),
+			],
+			vec![
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					"Bonus",
+					FontAlign::Right,
+					THEME.clone(),
+				)),
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					&format!("{}", map_stats.bonus),
+					FontAlign::Left,
+					THEME_LIGHT.clone(),
+				)),
+			],
+			vec![
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					"Time",
+					FontAlign::Right,
+					THEME.clone(),
+				)),
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					&format!(
+						"{}'{}.{:<02}\"",
+						(map_stats.time / 60.).floor(),
+						map_stats.time.rem_euclid(60.).floor(),
+						(map_stats.time.rem_euclid(1.) * 100.).floor()
+					),
+					FontAlign::Left,
+					THEME_LIGHT.clone(),
+				)),
+			],
+			vec![
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					"Gifts Found",
+					FontAlign::Right,
+					THEME.clone(),
+				)),
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					&format!("{}", map_stats.gifts_found),
+					FontAlign::Left,
+					THEME_LIGHT.clone(),
+				)),
+			],
+			vec![
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					"Gifts Lost",
+					FontAlign::Right,
+					THEME.clone(),
+				)),
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					&format!("{}", map_stats.gifts_lost),
+					FontAlign::Left,
+					THEME_LIGHT.clone(),
+				)),
+			],
+			vec![
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					"Robots Destroyed",
+					FontAlign::Right,
+					THEME.clone(),
+				)),
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					&format!("{}", map_stats.robots_destroyed),
+					FontAlign::Left,
+					THEME_LIGHT.clone(),
+				)),
+			],
+			vec![
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					"Deaths",
+					FontAlign::Right,
+					THEME.clone(),
+				)),
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					&format!("{}", map_stats.deaths),
+					FontAlign::Left,
+					THEME_LIGHT.clone(),
+				)),
+			],
+			vec![
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					"Max Speed",
+					FontAlign::Right,
+					THEME.clone(),
+				)),
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					&format!("{:.1} km/h", mps_to_kph(map_stats.max_speed)),
+					FontAlign::Left,
+					THEME_LIGHT.clone(),
+				)),
+			],
+			vec![
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					"Max Punch Speed",
+					FontAlign::Right,
+					THEME.clone(),
+				)),
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					&format!("{:.1} m/s", map_stats.max_rel_speed),
+					FontAlign::Left,
+					THEME_LIGHT.clone(),
+				)),
+			],
+			vec![
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					"Max Power Level",
+					FontAlign::Right,
+					THEME.clone(),
+				)),
+				ui::Widget::Label(ui::Label::new_align(
+					w,
+					h,
+					&format!("{:.1}x", map_stats.max_power_level),
+					FontAlign::Left,
+					THEME_LIGHT.clone(),
+				)),
+			],
+			vec![ui::Widget::Button(ui::Button::new(
+				w,
+				h,
+				"Continue",
+				Action::Start,
+				THEME.clone(),
+			))],
+		]);
+
+		let mut res = Self {
+			widgets: ui::WidgetList::new(
+				&widgets.iter().map(|r| &r[..]).collect::<Vec<_>>(),
+				THEME.clone(),
+			),
+		};
+		res.resize(state);
+		Ok(res)
+	}
+
+	pub fn draw(&self, state: &game_state::GameState)
+	{
+		self.widgets.draw(&state.hs);
+	}
+
+	pub fn input(&mut self, state: &mut game_state::GameState, event: &Event) -> Option<Action>
+	{
+		self.widgets.input(event, &mut state.sfx, &mut state.hs)
+	}
+
+	pub fn resize(&mut self, state: &game_state::GameState)
+	{
+		let cx = state.hs.buffer_width() / 2.;
+		let cy = state.hs.buffer_height() / 2. + 16.;
+
+		self.widgets.set_pos(Point2::new(cx, cy));
+		self.widgets.resize(&state.hs);
 	}
 }

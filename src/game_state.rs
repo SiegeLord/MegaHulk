@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::{ui, utils};
+use crate::{game::MapStats, ui, utils};
 use allegro::*;
 use allegro_font::*;
 use allegro_image::*;
@@ -208,6 +208,10 @@ pub enum NextScreen
 	Menu,
 	InGameMenu,
 	Quit,
+	Intermission
+	{
+		map_stats: MapStats,
+	},
 }
 
 pub struct GameState
@@ -225,6 +229,8 @@ pub struct GameState
 	pub map_depth_shader: Option<Shader>,
 	pub exploration_shader: Option<Shader>,
 	pub deferred_renderer: Option<deferred::DeferredRenderer>,
+
+	pub next_level_desc: Option<String>,
 
 	hud_font: Option<Font>,
 	small_hud_font: Option<Font>,
@@ -271,6 +277,7 @@ impl GameState
 			scenes: HashMap::new(),
 			sfx: sfx,
 			atlas: atlas::Atlas::new(1024),
+			next_level_desc: None,
 			controls: controls,
 			basic_shader: None,
 			forward_shader: None,
