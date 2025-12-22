@@ -174,10 +174,12 @@ impl game_loop::LoopState for LoopState
 					game::Game::new(&mut self.game_state).into_slhack()?,
 				))
 			}
-			Some(game_state::NextScreen::Menu) =>
+			Some(game_state::NextScreen::Menu {
+				ignore_first_mouse_up,
+			}) =>
 			{
 				self.cur_screen = Some(Screen::Menu(
-					menu::Menu::new(&mut self.game_state).into_slhack()?,
+					menu::Menu::new(ignore_first_mouse_up, &mut self.game_state).into_slhack()?,
 				))
 			}
 			Some(game_state::NextScreen::Intermission { ref map_stats }) =>

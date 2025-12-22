@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::game::MapStats;
 use crate::{components, game_state, ui, utils};
 
 use allegro::*;
@@ -8,29 +9,22 @@ use nalgebra::{Matrix4, Point2};
 use rand::prelude::*;
 use slhack::controls;
 
-pub struct Menu
+pub struct Intermission
 {
-	subscreens: ui::SubScreens,
-	ignore_first_mouse_up: bool,
+	intermission_menu: ui::IntermissionMenu,
 }
 
-impl Menu
+impl Intermission
 {
-	pub fn new(ignore_first_mouse_up: bool, state: &mut game_state::GameState) -> Result<Self>
+	pub fn new(map_stats: &MapStats, state: &mut game_state::GameState) -> Result<Self>
 	{
 		state.hs.paused = false;
 		state.hs.hide_mouse = true;
 		state.sfx.cache_sample("data/ui1.ogg")?;
 		state.sfx.cache_sample("data/ui2.ogg")?;
-		state.cache_sprite("data/title.cfg")?;
 
-		let mut subscreens = ui::SubScreens::new(state);
-		subscreens.push(ui::SubScreen::MainMenu(ui::MainMenu::new(state)?));
-
-		Ok(Self {
-			ignore_first_mouse_up: ignore_first_mouse_up,
-			subscreens,
-		})
+		let intermission_menu = ui::IntermissionMenu::new(map_stats, state)?;
+		Ok(Self { intermission_menu })
 	}
 
 	pub fn input(
@@ -47,23 +41,13 @@ impl Menu
 					state.hs.mouse_pos = Point2::new(x as i32, y as i32);
 				}
 			}
-			Event::MouseButtonUp { .. } =>
-			{
-				// HACK
-				if self.ignore_first_mouse_up
-				{
-					self.ignore_first_mouse_up = false;
-					return Ok(None);
-				}
-			}
 			_ => (),
 		}
-		if let Some(action) = self.subscreens.input(state, event)?
+		if let Some(action) = self.intermission_menu.input(state, event)
 		{
 			match action
 			{
 				ui::Action::Start => return Ok(Some(game_state::NextScreen::Game)),
-				ui::Action::Quit => return Ok(Some(game_state::NextScreen::Quit)),
 				_ => (),
 			}
 		}
@@ -72,14 +56,33 @@ impl Menu
 
 	pub fn draw(&mut self, state: &game_state::GameState) -> Result<()>
 	{
-		state.hs.core.clear_to_color(Color::from_rgb_f(0., 0., 0.5));
-		self.subscreens.draw(state);
+		// TODO: Why do I need to set these?
+		state.hs.core.set_target_bitmap(Some(state.hs.buffer1()));
+		state
+			.hs
+			.core
+			.use_shader(Some(state.basic_shader.as_ref().unwrap()))
+			.unwrap();
+		state
+			.hs
+			.core
+			.set_blender(BlendOperation::Add, BlendMode::One, BlendMode::InverseAlpha);
+		state
+			.hs
+			.core
+			.set_shader_uniform(
+				"tint",
+				&[crate::game::color_to_array(Color::from_rgb_f(1., 1., 1.))][..],
+			)
+			.ok();
 
+		state.hs.core.clear_to_color(Color::from_rgb_f(0., 0., 0.5));
+		self.intermission_menu.draw(state);
 		Ok(())
 	}
 
 	pub fn resize(&mut self, state: &game_state::GameState)
 	{
-		self.subscreens.resize(state);
+		self.intermission_menu.resize(state);
 	}
 }

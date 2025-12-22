@@ -205,7 +205,10 @@ pub type Object = scene::Object<MaterialKind>;
 pub enum NextScreen
 {
 	Game,
-	Menu,
+	Menu
+	{
+		ignore_first_mouse_up: bool,
+	},
 	InGameMenu,
 	Quit,
 	Intermission

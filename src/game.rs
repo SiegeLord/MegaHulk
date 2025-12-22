@@ -37,6 +37,7 @@ const BIG_GROUP: Group = Group::GROUP_3;
 const SMALL_GROUP: Group = Group::GROUP_4;
 
 const POWER_LEVEL_TIME: f64 = 10.0;
+const SELF_DESTRUCT_TIME: f64 = 10.0;
 const ENERGY_AMOUNT: f32 = 20.;
 
 pub fn color_to_array(color: Color) -> [f32; 4]
@@ -260,7 +261,9 @@ impl Game
 				{
 					ui::Action::MainMenu =>
 					{
-						return Ok(Some(game_state::NextScreen::Menu));
+						return Ok(Some(game_state::NextScreen::Menu {
+							ignore_first_mouse_up: false,
+						}));
 					}
 					_ => (),
 				}
@@ -365,6 +368,7 @@ pub fn spawn_reactor(
 		comps::Effect::ExplosionSpawner {
 			kind: comps::ExplosionKind::Small,
 		},
+		comps::Effect::StartSelfDestruct,
 		comps::Effect::OpenExit,
 	];
 
@@ -453,7 +457,8 @@ pub fn spawn_exit_explosions(
 }
 
 pub fn spawn_exit_camera(
-	scene_name: &str, obj_name: &str, world: &mut hecs::World, state: &mut game_state::GameState,
+	scene_name: &str, obj_name: &str, loop_effects: &[comps::Effect], world: &mut hecs::World,
+	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	let scene = state.get_scene(scene_name)?;
@@ -471,7 +476,7 @@ pub fn spawn_exit_camera(
 			scene_name,
 			obj_idx as i32,
 			scene::AnimationState::new("Play", true),
-			&[],
+			loop_effects,
 		),
 	));
 	Ok(entity)
@@ -1403,6 +1408,7 @@ enum MapState
 	Interactive,
 	DeathCinematic,
 	ExitCinematic,
+	MineExploded,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1528,6 +1534,8 @@ struct Map
 	messages: MessageTracker,
 	stats: MapStats,
 	start_time: f64,
+	self_destruct_start: Option<f64>,
+	next_self_destruct_message: f64,
 }
 
 impl Map
@@ -1586,6 +1594,8 @@ impl Map
 			map_state: MapState::Interactive,
 			messages: MessageTracker::new(),
 			start_time: state.hs.time,
+			self_destruct_start: None,
+			next_self_destruct_message: 0.,
 		})
 	}
 
@@ -1823,17 +1833,27 @@ impl Map
 			{
 				if state.controls.get_action_state(action) > 0.5
 				{
-					self.player = spawn_player(
-						self.player_start.pos,
-						self.player_start.rot,
-						&mut self.physics,
-						&mut self.world,
-						state,
-					)?;
-					self.camera = self.player;
-					self.map_state = MapState::Interactive;
 					state.controls.clear_action_state(action);
-					break;
+					if self.map_state == MapState::MineExploded
+					{
+						state.hs.menu_controls.clear_action_states();
+						return Ok(Some(game_state::NextScreen::Menu {
+							ignore_first_mouse_up: true,
+						}));
+					}
+					else
+					{
+						self.player = spawn_player(
+							self.player_start.pos,
+							self.player_start.rot,
+							&mut self.physics,
+							&mut self.world,
+							state,
+						)?;
+						self.camera = self.player;
+						self.map_state = MapState::Interactive;
+						break;
+					}
 				}
 			}
 		}
@@ -2628,6 +2648,44 @@ impl Map
 			}
 		}
 
+		// Self destruct.
+		if let Some(self_destruct_start) = self.self_destruct_start
+		{
+			let time_left = SELF_DESTRUCT_TIME - (state.hs.time - self_destruct_start);
+			if self.map_state == MapState::Interactive
+			{
+				if time_left > 0.5
+				{
+					if state.hs.time > self.next_self_destruct_message
+					{
+						self.messages.add(
+							&format!("Self destruct in {} seconds!", time_left.round() as i32),
+							state.hs.time,
+						);
+						if time_left < 10.
+						{
+							self.next_self_destruct_message += 1.;
+						}
+						else
+						{
+							self.next_self_destruct_message += 10.;
+						}
+					}
+				}
+				else if time_left <= 0.
+				{
+					effects.push((
+						comps::Effect::Damage {
+							amount: 1000.,
+							owner: self.player,
+						},
+						self.player,
+						Some(self.player),
+					));
+				}
+			}
+		}
+
 		// Effects.
 		while !effects.is_empty()
 		{
@@ -2810,6 +2868,7 @@ impl Map
 						self.camera = spawn_exit_camera(
 							&self.level_desc.scene,
 							"ExitCamera",
+							&[],
 							&mut self.world,
 							state,
 						)?;
@@ -2830,6 +2889,11 @@ impl Map
 							}
 						}
 					}
+					comps::Effect::StartSelfDestruct =>
+					{
+						self.self_destruct_start = Some(state.hs.time);
+						self.next_self_destruct_message = state.hs.time;
+					}
 					comps::Effect::ExplosionSpawner { kind } =>
 					{
 						self.world
@@ -2838,22 +2902,46 @@ impl Map
 					comps::Effect::SpawnDeathCamera =>
 					{
 						self.messages.add("Hulk destroyed!", state.hs.time);
-						self.map_state = MapState::DeathCinematic;
-						self.show_map = false;
-						self.stats.deaths += 1;
-						let mut src_pos = None;
-						if let Ok(position) = self.world.get::<&comps::Position>(id)
+
+						if let Some(self_destruct_start) = self.self_destruct_start
+							&& (SELF_DESTRUCT_TIME - (state.hs.time - self_destruct_start)) < 0.
 						{
-							src_pos = Some(position.pos.clone());
-						}
-						if let Some(src_pos) = src_pos
-						{
-							self.camera = spawn_death_camera(
-								src_pos,
-								id,
-								&mut self.physics,
+							self.map_state = MapState::MineExploded;
+							spawn_exit_explosions(
+								&self.level_desc.scene,
+								"ExitExplosions",
 								&mut self.world,
+								state,
 							)?;
+							self.camera = spawn_exit_camera(
+								&self.level_desc.scene,
+								"ExitCamera",
+								&[comps::Effect::SendMessage {
+									message: format!("You failed to get out in time!"),
+								}],
+								&mut self.world,
+								state,
+							)?;
+						}
+						else
+						{
+							self.map_state = MapState::DeathCinematic;
+							self.show_map = false;
+							self.stats.deaths += 1;
+							let mut src_pos = None;
+							if let Ok(position) = self.world.get::<&comps::Position>(id)
+							{
+								src_pos = Some(position.pos.clone());
+							}
+							if let Some(src_pos) = src_pos
+							{
+								self.camera = spawn_death_camera(
+									src_pos,
+									id,
+									&mut self.physics,
+									&mut self.world,
+								)?;
+							}
 						}
 					}
 					comps::Effect::DelayedDeath { delay } =>
@@ -2986,6 +3074,10 @@ impl Map
 					comps::Effect::RobotDestroyed =>
 					{
 						self.stats.robots_destroyed += 1;
+					}
+					comps::Effect::SendMessage { message } =>
+					{
+						self.messages.add(&message, state.hs.time);
 					}
 				}
 			}
@@ -3741,10 +3833,8 @@ impl Map
 					&format!("{:+}", self.score.last_change),
 				);
 			}
-
-			self.messages.draw(cx, 16., state);
 		}
-
+		self.messages.draw(cx, 32., state);
 		if self.show_map
 		{
 			state.hs.core.draw_text(

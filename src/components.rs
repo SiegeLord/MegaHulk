@@ -481,6 +481,7 @@ pub enum Effect
 	Open,
 	StartExitAnimation,
 	OpenExit,
+	StartSelfDestruct,
 	ExplosionSpawner
 	{
 		kind: ExplosionKind,
@@ -507,6 +508,10 @@ pub enum Effect
 	EjectInventory,
 	ExitMap,
 	RobotDestroyed,
+	SendMessage
+	{
+		message: String,
+	},
 }
 
 #[derive(Debug, Clone)]
