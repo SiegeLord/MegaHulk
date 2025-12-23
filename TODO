@@ -1,6 +1,8 @@
 HUD
     - Ammo stuff
 
+Explosion spawner radius
+
 Rescale lengths to 3x or so for the intermission
 
 Turn max punch speed into kinetic energy
@@ -10,8 +12,6 @@ Spawn animation
 Weapons
 
 Final screen
-
-Fix player collision
 
 Frac scale isn't updating
 

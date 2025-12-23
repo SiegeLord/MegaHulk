@@ -82,6 +82,7 @@ pub struct Scene
 	pub color: Color,
 	// This indexes into the Scene's objects
 	pub animation_states: HashMap<i32, AnimationState>,
+	pub visible: bool,
 }
 
 impl Scene
@@ -92,6 +93,7 @@ impl Scene
 			scene: scene.to_string(),
 			color: Color::from_rgb_f(1., 1., 1.),
 			animation_states: HashMap::new(),
+			visible: true,
 		}
 	}
 
@@ -109,6 +111,7 @@ impl Scene
 			scene: scene.to_string(),
 			color: Color::from_rgb_f(1., 1., 1.),
 			animation_states: animation_states,
+			visible: true,
 		}
 	}
 }

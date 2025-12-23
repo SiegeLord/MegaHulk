@@ -20,6 +20,7 @@ uniform sampler2D lightmap;
 
 uniform int material;
 uniform vec4 base_color;
+uniform vec4 base_light;
 
 uniform float time;
 uniform vec3 player_pos;
@@ -37,7 +38,7 @@ void main()
     albedo_buffer = base_color * varying_color * tex_color;
     if (albedo_buffer.a == 0.0) discard;
 
-    vec4 light = vec4(0.);
+    vec4 light = base_light;
     if (material == STATIC_MATERIAL || material == DYNAMIC_WITH_LIGHTMAP_MATERIAL || material == DYNAMIC_WITH_ADDITIVE_LIGHTMAP_MATERIAL)
 	light = vec4(lightmap_color.rgb, 0.);
     else if (material == FULLBRIGHT_MATERIAL)

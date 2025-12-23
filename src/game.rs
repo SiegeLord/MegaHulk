@@ -381,7 +381,7 @@ pub fn spawn_reactor(
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scene_name = "data/robot1.glb";
+	let scene_name = "data/megahulk.glb";
 	let scene = game_state::cache_scene(state, scene_name)?;
 
 	let mut health = comps::Health::new(35.);
@@ -718,8 +718,9 @@ pub fn spawn_player(
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scene_name = "data/test.glb";
-	game_state::cache_scene(state, scene_name)?;
+	let scene_name = "data/megahulk.glb";
+	let scene = game_state::cache_scene(state, scene_name)?;
+
 	let mut map_scene = comps::MapScene::new(scene_name);
 	map_scene.explored = true;
 
@@ -735,10 +736,12 @@ pub fn spawn_player(
 		comps::Effect::ClearGifts,
 	];
 
+	let mut draw_scene = comps::Scene::new(scene_name);
+	draw_scene.visible = false;
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Controller::new(),
-		comps::Scene::new(scene_name),
+		draw_scene,
 		comps::Stats::new(comps::StatValues::new_player()),
 		comps::OnDeathEffects::new(&[
 			comps::Effect::SpawnExplosion {
@@ -758,30 +761,45 @@ pub fn spawn_player(
 		.linear_damping(3.)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
-	let collider = ColliderBuilder::ball(0.5)
-		.restitution(0.1)
-		//.mass(4.0)
-		.mass_properties(MassProperties::new(
-			Point3::origin(),
-			4.0,
-			1000.0f32 * Vector3::new(1., 1., 1.),
-		))
-		.friction(0.)
-		.user_data(entity.to_bits().get() as u128)
-		.collision_groups(InteractionGroups::new(PLAYER_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP))
-		//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
-		.build();
-	let ball_body_handle = physics.rigid_body_set.insert(rigid_body);
-	physics.collider_set.insert_with_parent(
-		collider,
-		ball_body_handle,
-		&mut physics.rigid_body_set,
-	);
-	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
+	let body_handle = physics.rigid_body_set.insert(rigid_body);
+
+	for (vertices, _) in get_collision_trimeshes(scene)
+	{
+		let collider = ColliderBuilder::convex_hull(&vertices).ok_or_else(|| format!("Couldn't create convex hull for {}", scene_name))?
+			.restitution(0.1)
+			.mass_properties(MassProperties::new(
+                       Point3::origin(),
+                       4.0,
+                       1000.0f32 * Vector3::new(1., 1., 1.),
+               ))
+			.friction(0.)
+			.user_data(entity.to_bits().get() as u128)
+			.collision_groups(InteractionGroups::new(PLAYER_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP))
+			//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
+			.build();
+		physics
+			.collider_set
+			.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
+	}
+	world.insert_one(entity, comps::Physics::new(body_handle))?;
+
+	let mut gripper_1_pos = None;
+	let mut gripper_2_pos = None;
+	for obj in &scene.objects
+	{
+		if obj.name == "Gripper1"
+		{
+			gripper_1_pos = Some(obj.pos.coords);
+		}
+		else if obj.name == "Gripper2"
+		{
+			gripper_2_pos = Some(obj.pos.coords);
+		}
+	}
 
 	let gripper_1 = spawn_gripper(
 		pos,
-		Vector3::new(-0.5, -0.3, -0.5),
+		gripper_1_pos.ok_or_else(|| format!("Could not find Gripper1 in {}", scene_name))?,
 		entity,
 		physics,
 		world,
@@ -789,7 +807,7 @@ pub fn spawn_player(
 	)?;
 	let gripper_2 = spawn_gripper(
 		pos,
-		Vector3::new(0.5, -0.3, -0.5),
+		gripper_2_pos.ok_or_else(|| format!("Could not find Gripper2 in {}", scene_name))?,
 		entity,
 		physics,
 		world,
@@ -2933,6 +2951,10 @@ impl Map
 					}
 					comps::Effect::StartExitAnimation =>
 					{
+						if let Ok(mut scene) = self.world.get::<&mut comps::Scene>(self.player)
+						{
+							scene.visible = true;
+						}
 						state
 							.sfx
 							.play_music_once("data/MegaHulk_Escape.ogg", 0.5, &state.hs.core);
@@ -2991,6 +3013,10 @@ impl Map
 					comps::Effect::SpawnDeathCamera =>
 					{
 						self.messages.add("Hulk destroyed!", state.hs.time);
+						if let Ok(mut scene) = self.world.get::<&mut comps::Scene>(self.player)
+						{
+							scene.visible = true;
+						}
 
 						if let Some(self_destruct_start) = self.self_destruct_start
 							&& (SELF_DESTRUCT_TIME - (state.hs.time - self_destruct_start)) < 0.
@@ -3398,6 +3424,11 @@ impl Map
 					.core
 					.set_shader_uniform("base_color", &[color][..])
 					.ok();
+				state
+					.hs
+					.core
+					.set_shader_uniform("base_light", &[[1., 1., 1., 0.]][..])
+					.ok();
 
 				state.get_scene(&scene.scene).unwrap().draw(
 					&state.hs.core,
@@ -3415,6 +3446,10 @@ impl Map
 				.query::<(&comps::Position, &comps::Scene)>()
 				.iter()
 			{
+				if !scene.visible
+				{
+					continue;
+				}
 				let shift = Isometry3 {
 					translation: position.draw_pos(alpha).coords.into(),
 					rotation: position.draw_rot(alpha),
@@ -3457,6 +3492,11 @@ impl Map
 					.hs
 					.core
 					.set_shader_uniform("time", &[state.hs.time as f32][..])
+					.ok();
+				state
+					.hs
+					.core
+					.set_shader_uniform("base_light", &[[0.; 4]][..])
 					.ok();
 
 				state.get_scene(&scene.scene).unwrap().draw(
