@@ -675,14 +675,7 @@ pub fn spawn_item(
 	}
 	if let Some(light_color) = light_color
 	{
-		world.insert_one(
-			entity,
-			comps::Light {
-				color: light_color,
-				intensity: 100.,
-				static_: false,
-			},
-		)?;
+		world.insert_one(entity, comps::Light::new_dynamic(light_color, 100.))?;
 	}
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -833,11 +826,11 @@ pub fn spawn_gripper(
 		comps::Position::new(pos, UnitQuaternion::identity()),
 		comps::Scene::new(scene_name),
 		comps::Gripper::new(parent, offset),
-		comps::Light {
-			color: Color::from_rgb_f(0., 1., 0.),
-			intensity: 100.,
-			static_: false,
-		},
+		comps::Light::new_dynamic_with_offset(
+			Color::from_rgb_f(0., 1., 1.),
+			100.,
+			Vector3::new(0., 0., 0.1),
+		),
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -869,7 +862,7 @@ pub fn spawn_connector(
 	let scene_name = "data/connector.glb";
 	game_state::cache_scene(state, scene_name)?;
 	let mut scene = comps::AdditiveScene::new(scene_name);
-	scene.color = Color::from_rgb_f(0.0, 0.5, 0.0);
+	scene.color = Color::from_rgb_f(0.0, 0.5, 0.5);
 
 	let mut position = comps::Position::new(Point3::origin(), UnitQuaternion::identity());
 	let connector = comps::Connector::new(start, end, start_offset, end_offset);
@@ -901,11 +894,7 @@ pub fn spawn_hit(
 	let entity = world.spawn((
 		comps::Position::new_scaled(pos, rot, Vector3::from_element(0.1)),
 		scene,
-		comps::Light {
-			color: Color::from_rgb_f(0.5, 0.5, 0.),
-			intensity: 500.,
-			static_: false,
-		},
+		comps::Light::new_dynamic(Color::from_rgb_f(0.5, 0.5, 0.), 500.),
 		comps::ExplosionScaling::new(4.),
 		comps::TimeToDie::new(state.hs.time() + 0.2),
 	));
@@ -934,11 +923,7 @@ pub fn spawn_explosion(
 		scene,
 		comps::ExplosionScaling::new(4.),
 		comps::TimeToDie::new(state.hs.time() + 0.2 * scale as f64),
-		comps::Light {
-			color: color,
-			intensity: scale * 500.,
-			static_: false,
-		},
+		comps::Light::new_dynamic(color, scale * 500.),
 	));
 	Ok(entity)
 }
@@ -961,11 +946,7 @@ pub fn spawn_bullet(
 			},
 			comps::Effect::SpawnHit,
 		]),
-		comps::Light {
-			color: Color::from_rgb_f(1., 1., 0.),
-			intensity: 100.,
-			static_: false,
-		},
+		comps::Light::new_static(Color::from_rgb_f(1., 1., 0.), 100.),
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -1265,11 +1246,7 @@ fn spawn_level(
 			{
 				spawn_light(
 					object.pos,
-					comps::Light {
-						color: color,
-						intensity: intensity / 30.,
-						static_: true,
-					},
+					comps::Light::new_static(color, intensity / 30.),
 					world,
 				)?;
 			}
@@ -2156,7 +2133,7 @@ impl Map
 		let handler = PhysicsEventHandler::new();
 		self.physics.step(&handler);
 
-		for (event, _contact_pair) in handler.collision_events.try_read().unwrap().iter()
+		for (event, contact_pair) in handler.collision_events.try_read().unwrap().iter()
 		{
 			if let CollisionEvent::Started(collider_handle_1, collider_handle_2, _) = event
 			{
@@ -2223,9 +2200,36 @@ impl Map
 									self.physics.impulse_joint_set.remove(joint_handle, true);
 								};
 
-								let joint = FixedJointBuilder::new()
+								let mut joint = FixedJointBuilder::new()
 									.local_anchor1(Point3::new(0., 0., 0.))
 									.local_anchor2(Point3::origin() + body.translation());
+								for contact_manifold in contact_pair
+									.as_ref()
+									.iter()
+									.flat_map(|cp| cp.manifolds.iter())
+								{
+									if contact_manifold.points.is_empty()
+										|| contact_manifold.local_n1.norm() == 0.
+									{
+										continue;
+									}
+									let up = if contact_manifold.local_n1.dot(&Vector3::y()).abs()
+										== 1.
+									{
+										Vector3::x_axis()
+									}
+									else
+									{
+										Vector3::y_axis()
+									};
+									joint = joint.local_frame1(Isometry3::look_at_lh(
+										&Point3::origin(),
+										&contact_manifold.local_n1.into(),
+										&up,
+									));
+									break;
+								}
+
 								let joint_handle = self.physics.impulse_joint_set.insert(
 									body_handle,
 									other_collider.parent().unwrap(),
@@ -3526,7 +3530,14 @@ impl Map
 			{
 				let shift = Isometry3::new(position.draw_pos(alpha).coords, Vector3::zeros());
 				let transform = Similarity3::from_isometry(shift, 0.5 * light.intensity.sqrt());
-				let light_pos = transform.transform_point(&Point3::origin());
+				let light_transform = Similarity3::from_isometry(
+					Isometry3 {
+						translation: light.offset.into(),
+						rotation: UnitQuaternion::identity(),
+					},
+					1.,
+				);
+				let light_pos = (light_transform * transform).transform_point(&Point3::origin());
 
 				let (r, g, b) = light.color.to_rgb_f();
 
@@ -3552,7 +3563,7 @@ impl Map
 					.ok(); //.unwrap();
 
 				state.hs.core.use_transform(&utils::mat4_to_transform(
-					camera.to_homogeneous() * transform.to_homogeneous(),
+					camera.to_homogeneous() * light_transform.to_homogeneous() * transform.to_homogeneous(),
 				));
 
 				if let Ok(scene) = state.get_scene("data/sphere.glb")

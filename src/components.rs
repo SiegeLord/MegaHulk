@@ -11,6 +11,40 @@ pub struct Light
 	pub color: Color,
 	pub intensity: f32,
 	pub static_: bool,
+	pub offset: Vector3<f32>,
+}
+
+impl Light
+{
+	pub fn new_static(color: Color, intensity: f32) -> Self
+	{
+		Self {
+			color,
+			intensity,
+			static_: true,
+			offset: Vector3::zeros(),
+		}
+	}
+
+	pub fn new_dynamic(color: Color, intensity: f32) -> Self
+	{
+		Self {
+			color,
+			intensity,
+			static_: false,
+			offset: Vector3::zeros(),
+		}
+	}
+
+	pub fn new_dynamic_with_offset(color: Color, intensity: f32, offset: Vector3<f32>) -> Self
+	{
+		Self {
+			color,
+			intensity,
+			static_: false,
+			offset,
+		}
+	}
 }
 
 #[derive(Debug, Copy, Clone)]
