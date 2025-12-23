@@ -20,7 +20,7 @@ use rapier3d::dynamics::{
 };
 use rapier3d::geometry::{
 	ColliderBuilder, ColliderHandle, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase,
-	Group, InteractionGroups, NarrowPhase, Ray, SharedShape, TriMeshFlags,
+	Group, InteractionGroups, InteractionTestMode, NarrowPhase, Ray, SharedShape, TriMeshFlags,
 };
 use rapier3d::pipeline::{ActiveEvents, EventHandler, PhysicsPipeline, QueryFilter};
 use serde_derive::{Deserialize, Serialize};
@@ -158,7 +158,7 @@ impl Physics
 	}
 
 	fn ray_cast(
-		&self, pos: Point3<f32>, dir: Vector3<f32>, source: RigidBodyHandle,
+		&self, pos: Point3<f32>, dir: Vector3<f32>, source: RigidBodyHandle, range: f32,
 	) -> Option<(ColliderHandle, f32)>
 	{
 		let query_pipeline = self.broad_phase.as_query_pipeline(
@@ -167,11 +167,15 @@ impl Physics
 			&self.collider_set,
 			QueryFilter::default()
 				.exclude_rigid_body(source)
-				.groups(InteractionGroups::new(BIG_GROUP, BIG_GROUP | PLAYER_GROUP)),
+				.groups(InteractionGroups::new(
+					BIG_GROUP,
+					BIG_GROUP | PLAYER_GROUP,
+					InteractionTestMode::And,
+				)),
 		);
 
 		let ray = Ray::new(pos, dir);
-		query_pipeline.cast_ray(&ray, f32::MAX, true)
+		query_pipeline.cast_ray(&ray, range, true)
 	}
 }
 
@@ -325,7 +329,7 @@ pub fn spawn_robot(
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scene_name = "data/robot1.glb";
+	let scene_name = "data/robot2.glb";
 	let scene = game_state::cache_scene(state, scene_name)?;
 
 	let entity = world.spawn((
@@ -365,7 +369,7 @@ pub fn spawn_robot(
 			.density(1.0)
 			.friction(0.)
 			.user_data(entity.to_bits().get() as u128)
-			.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP))
+			.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP, InteractionTestMode::And))
 			//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
 			.build();
 		physics
@@ -414,7 +418,7 @@ pub fn spawn_reactor(
 			.density(1.0)
 			.friction(0.)
 			.user_data(entity.to_bits().get() as u128)
-			.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP))
+			.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP, InteractionTestMode::And))
 			//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
 			.build();
 		physics
@@ -525,6 +529,7 @@ pub fn spawn_death_camera(
 		.collision_groups(InteractionGroups::new(
 			SMALL_GROUP,
 			PLAYER_GROUP | BIG_GROUP,
+			InteractionTestMode::And,
 		))
 		.build();
 	let body_handle = physics.rigid_body_set.insert(rigid_body);
@@ -564,7 +569,11 @@ pub fn spawn_exit_trigger(
 	let collider = ColliderBuilder::ball(1.)
 		.sensor(true)
 		.user_data(entity.to_bits().get() as u128)
-		.collision_groups(InteractionGroups::new(PLAYER_GROUP, PLAYER_GROUP))
+		.collision_groups(InteractionGroups::new(
+			PLAYER_GROUP,
+			PLAYER_GROUP,
+			InteractionTestMode::And,
+		))
 		.active_events(ActiveEvents::COLLISION_EVENTS)
 		.build();
 	physics
@@ -688,7 +697,11 @@ pub fn spawn_item(
 		.mass(0.1)
 		.friction(0.)
 		.user_data(entity.to_bits().get() as u128)
-		.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP))
+		.collision_groups(InteractionGroups::new(
+			BIG_GROUP,
+			PLAYER_GROUP | BIG_GROUP,
+			InteractionTestMode::And,
+		))
 		.active_events(ActiveEvents::COLLISION_EVENTS)
 		.build();
 	let body_handle = physics.rigid_body_set.insert(rigid_body);
@@ -767,7 +780,7 @@ pub fn spawn_player(
                ))
 			.friction(0.)
 			.user_data(entity.to_bits().get() as u128)
-			.collision_groups(InteractionGroups::new(PLAYER_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP))
+			.collision_groups(InteractionGroups::new(PLAYER_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP, InteractionTestMode::And))
 			//.active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
 			.build();
 		physics
@@ -962,6 +975,7 @@ pub fn spawn_bullet(
 		.collision_groups(InteractionGroups::new(
 			SMALL_GROUP,
 			PLAYER_GROUP | BIG_GROUP,
+			InteractionTestMode::And,
 		))
 		.build();
 	let ball_body_handle = physics.rigid_body_set.insert(rigid_body);
@@ -1216,6 +1230,7 @@ fn spawn_level(
 			.collision_groups(InteractionGroups::new(
 				BIG_GROUP,
 				PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP,
+				InteractionTestMode::And,
 			))
 			.user_data(entity.to_bits().get() as u128)
 			.build();
@@ -1997,13 +2012,13 @@ impl Map
 						let (forward, _, _) = get_dirs(position.rot);
 						if forward.dot(&dir) > 0.
 						{
-							if let Some((collider_handle, range)) =
-								self.physics.ray_cast(position.pos, dir, physics.handle)
+							if let Some((collider_handle, _)) =
+								self.physics.ray_cast(position.pos, dir, physics.handle, 5.)
 							{
 								let collider =
 									self.physics.collider_set.get(collider_handle).unwrap();
 								if hecs::Entity::from_bits(collider.user_data as u64).unwrap()
-									== self.player && range < 5.
+									== self.player
 								{
 									new_state = Some(comps::AIState::Attacking(self.player))
 								}
@@ -2023,20 +2038,38 @@ impl Map
 						controller.want_rotate.x = rot_speed * dir.dot(&up);
 						controller.want_rotate.y = -rot_speed * dir.dot(&right);
 
+						let visible = self
+							.physics
+							.ray_cast(position.pos, dir, physics.handle, 5.)
+							.map(|(collider_handle, _)| {
+								hecs::Entity::from_bits(
+									self.physics.collider_set[collider_handle].user_data as u64,
+								)
+								.unwrap() == target
+							})
+							.unwrap_or(false);
+
 						controller.want_move.z = 0.;
 						if dir.dot(&forward) > 0.99
 						{
-							if diff.norm() > 5.
+							if visible
 							{
-								controller.want_move.z = 1.;
-							}
-							else if diff.norm() < 3.
-							{
-								controller.want_move.z = -1.;
+								if diff.norm() > 5.
+								{
+									controller.want_move.z = 1.;
+								}
+								else if diff.norm() < 3.
+								{
+									controller.want_move.z = -1.;
+								}
+								else
+								{
+									controller.want_fire = true;
+								}
 							}
 							else
 							{
-								controller.want_fire = true;
+								controller.want_move.z = 1.;
 							}
 						}
 					}
@@ -2404,6 +2437,7 @@ impl Map
 								collider.set_collision_groups(InteractionGroups::new(
 									GRIPPER_GROUP,
 									BIG_GROUP,
+									InteractionTestMode::And,
 								));
 							}
 							if let Some(joint_handle) = gripper.attach_joint.take()
@@ -2521,9 +2555,12 @@ impl Map
 					let (forward, _, _) = get_dirs(player_position.rot);
 					if forward.dot(&dir) > 0.
 					{
-						if let Some((collider_handle, _)) =
-							self.physics
-								.ray_cast(player_position.pos, dir, player_physics.handle)
+						if let Some((collider_handle, _)) = self.physics.ray_cast(
+							player_position.pos,
+							dir,
+							player_physics.handle,
+							std::f32::MAX,
+						)
 						{
 							let collider = self.physics.collider_set.get(collider_handle).unwrap();
 							if hecs::Entity::from_bits(collider.user_data as u64).unwrap() == id
@@ -3563,7 +3600,9 @@ impl Map
 					.ok(); //.unwrap();
 
 				state.hs.core.use_transform(&utils::mat4_to_transform(
-					camera.to_homogeneous() * light_transform.to_homogeneous() * transform.to_homogeneous(),
+					camera.to_homogeneous()
+						* light_transform.to_homogeneous()
+						* transform.to_homogeneous(),
 				));
 
 				if let Ok(scene) = state.get_scene("data/sphere.glb")
