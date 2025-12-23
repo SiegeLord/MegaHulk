@@ -22,6 +22,9 @@ impl Intermission
 		state.hs.hide_mouse = true;
 		state.sfx.cache_sample("data/ui1.ogg")?;
 		state.sfx.cache_sample("data/ui2.ogg")?;
+		state
+			.sfx
+			.play_music("data/MegaHulk_Intermission.ogg", 0.5, &state.hs.core);
 
 		let intermission_menu = ui::IntermissionMenu::new(map_stats, state)?;
 		Ok(Self { intermission_menu })

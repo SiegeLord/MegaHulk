@@ -1443,6 +1443,7 @@ pub struct LevelDesc
 	pub scene: String,
 	pub name: String,
 	pub next: String,
+	pub music: String,
 }
 
 struct MessageTracker
@@ -1570,6 +1571,7 @@ impl Map
 	fn new(state: &mut game_state::GameState) -> Result<Self>
 	{
 		let level_desc: LevelDesc = utils::load_config(state.next_level_desc.as_ref().unwrap())?;
+		state.sfx.play_music(&level_desc.music, 0.5, &state.hs.core);
 
 		let mut world = hecs::World::new();
 
@@ -2869,17 +2871,14 @@ impl Map
 							if let Some(key) = door.key
 							{
 								let mut do_open = false;
-								if actor_id == Some(self.player)
+								if self.keys.contains(&key)
 								{
-									if self.keys.contains(&key)
-									{
-										do_open = true;
-									}
-									else
-									{
-										self.messages
-											.add(&format!("{} key required!", key), state.hs.time);
-									}
+									do_open = true;
+								}
+								else if actor_id == Some(self.player)
+								{
+									self.messages
+										.add(&format!("{} key required!", key), state.hs.time);
 								}
 								// Robot or player without key.
 								if !do_open
@@ -2934,6 +2933,9 @@ impl Map
 					}
 					comps::Effect::StartExitAnimation =>
 					{
+						state
+							.sfx
+							.play_music_once("data/MegaHulk_Escape.ogg", 0.5, &state.hs.core);
 						spawn_exit_explosions(
 							&self.level_desc.scene,
 							"ExitExplosions",
@@ -2993,6 +2995,12 @@ impl Map
 						if let Some(self_destruct_start) = self.self_destruct_start
 							&& (SELF_DESTRUCT_TIME - (state.hs.time - self_destruct_start)) < 0.
 						{
+							state.sfx.play_music_once(
+								"data/MegaHulk_Escape_Bad.ogg",
+								0.5,
+								&state.hs.core,
+							);
+
 							self.map_state = MapState::MineExplosionCinematic;
 							spawn_exit_explosions(
 								&self.level_desc.scene,
