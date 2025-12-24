@@ -132,24 +132,6 @@ impl Scene
 			visible: true,
 		}
 	}
-
-	pub fn new_with_animation(scene: &str, animation: &str) -> Self
-	{
-		let mut animation_states = HashMap::new();
-		animation_states.insert(
-			0,
-			AnimationState {
-				speed: 1.0,
-				state: scene::AnimationState::new(animation, false),
-			},
-		);
-		Self {
-			scene: scene.to_string(),
-			color: Color::from_rgb_f(1., 1., 1.),
-			animation_states: animation_states,
-			visible: true,
-		}
-	}
 }
 
 #[derive(Debug, Clone)]
@@ -261,7 +243,7 @@ pub enum GripperStatus
 	Flying,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GripperKind
 {
 	Normal,
@@ -278,8 +260,19 @@ impl GripperKind
 		{
 			GripperKind::Normal => "data/gripper.glb",
 			GripperKind::Plasma => "data/plasma_gripper.glb",
-			GripperKind::Explode => "data/plasma_gripper.glb",
-			GripperKind::BlackHole => "data/plasma_gripper.glb",
+			GripperKind::Explode => "data/explode_gripper.glb",
+			GripperKind::BlackHole => "data/black_hole_gripper.glb",
+		}
+	}
+
+	pub fn hud_bitmap(&self) -> &str
+	{
+		match self
+		{
+			GripperKind::Normal => "data/hud_plasma.png",
+			GripperKind::Plasma => "data/hud_plasma.png",
+			GripperKind::Explode => "data/hud_explode.png",
+			GripperKind::BlackHole => "data/hud_black_hole.png",
 		}
 	}
 
@@ -308,6 +301,17 @@ impl GripperKind
 			GripperKind::BlackHole => inventory.num_black_hole -= 1,
 		};
 		true
+	}
+
+	pub fn add_to_inventory(&self, inventory: &mut Inventory)
+	{
+		match self
+		{
+			GripperKind::Normal => (),
+			GripperKind::Plasma => inventory.num_plasma += 1,
+			GripperKind::Explode => inventory.num_explode += 1,
+			GripperKind::BlackHole => inventory.num_black_hole += 1,
+		}
 	}
 
 	pub fn color(&self) -> Color
@@ -540,7 +544,10 @@ pub enum ExplosionKind
 {
 	Small,
 	Big,
+	Huge,
 	Energy,
+	BlackHole,
+	Plasma,
 }
 
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
@@ -597,6 +604,10 @@ pub enum ItemKind
 		kind: KeyKind,
 	},
 	Gift,
+	Ammo
+	{
+		kind: GripperKind,
+	},
 }
 
 impl ItemKind
@@ -614,6 +625,15 @@ impl ItemKind
 				kind: KeyKind::Yellow,
 			}),
 			"gift" => Some(Self::Gift),
+			"plasma_ammo" => Some(Self::Ammo {
+				kind: GripperKind::Plasma,
+			}),
+			"explode_ammo" => Some(Self::Ammo {
+				kind: GripperKind::Explode,
+			}),
+			"black_hole_ammo" => Some(Self::Ammo {
+				kind: GripperKind::BlackHole,
+			}),
 			_ => None,
 		}
 	}
@@ -628,6 +648,7 @@ impl std::fmt::Display for ItemKind
 			ItemKind::Energy => write!(f, "Energy"),
 			ItemKind::Gift => write!(f, "Gift"),
 			ItemKind::Key { kind } => write!(f, "{} Key", kind),
+			ItemKind::Ammo { kind } => write!(f, "{} Ammo", kind),
 		}
 	}
 }
@@ -675,7 +696,10 @@ pub enum Effect
 	{
 		spawn_table: Vec<(f32, ItemKind)>,
 	},
-	ReattachGripper,
+	ReattachGripper
+	{
+		kind: GripperKind,
+	},
 	AddToScore
 	{
 		amount: i32,
@@ -694,6 +718,7 @@ pub enum Effect
 		radius: f32,
 		owner: hecs::Entity,
 	},
+	SpawnBlackHole,
 }
 
 #[derive(Debug, Clone)]
@@ -1007,4 +1032,10 @@ pub struct RobotDesc
 pub struct HomeTowards
 {
 	pub target: hecs::Entity,
+}
+
+#[derive(Debug, Clone)]
+pub struct BlackHole
+{
+	pub spawn_time: f64,
 }

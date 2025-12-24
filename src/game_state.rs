@@ -190,7 +190,7 @@ pub struct Options
 	pub play_music: bool,
 	pub sfx_volume: f32,
 	pub music_volume: f32,
-	pub camera_speed: f32,
+	pub fov: f32,
 	pub controls: controls::Controls<Action>,
 }
 
@@ -211,7 +211,7 @@ impl Default for Options
 			play_music: true,
 			sfx_volume: 1.,
 			music_volume: 1.,
-			camera_speed: 2.,
+			fov: 0.4,
 			controls: new_game_controls(),
 		}
 	}

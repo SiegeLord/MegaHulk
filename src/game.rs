@@ -188,12 +188,11 @@ impl Physics
 	}
 
 	fn ray_cast(
-		&self, source: RigidBodyHandle, pos: Point3<f32>, dir: Vector3<f32>, range: f32,
+		&self, source: Option<RigidBodyHandle>, pos: Point3<f32>, dir: Vector3<f32>, range: f32,
 	) -> Option<(ColliderHandle, f32)>
 	{
 		let ray = Ray::new(pos, dir);
-		self.make_query_pipeline(Some(source))
-			.cast_ray(&ray, range, true)
+		self.make_query_pipeline(source).cast_ray(&ray, range, true)
 	}
 
 	fn ball_query(
@@ -696,7 +695,7 @@ pub fn spawn_item(
 	let (scene_name, scene_color, light_color, map_scene, effects) = match kind
 	{
 		comps::ItemKind::Energy => (
-			"data/energy.glb",
+			"data/energy.glb".to_string(),
 			Color::from_rgb_f(1., 1., 1.),
 			Some(Color::from_rgb_f(0., 0., 1.)),
 			None,
@@ -706,7 +705,7 @@ pub fn spawn_item(
 			],
 		),
 		comps::ItemKind::Key { kind: key_kind } => (
-			"data/key.glb",
+			"data/key.glb".to_string(),
 			key_kind.color(),
 			Some(key_kind.color()),
 			None,
@@ -716,7 +715,7 @@ pub fn spawn_item(
 			],
 		),
 		comps::ItemKind::Gift => (
-			"data/gift.glb",
+			"data/gift.glb".to_string(),
 			Color::from_rgb_f(1., 1., 1.),
 			None,
 			Some(("data/gift_map.glb", Color::from_rgb_f(1., 0., 1.))),
@@ -725,13 +724,39 @@ pub fn spawn_item(
 				comps::Effect::AddToScore { amount: 5000 },
 			],
 		),
+		comps::ItemKind::Ammo { kind: ammo_kind } => (
+			ammo_kind.scene_name().to_string(),
+			Color::from_rgb_f(1., 1., 1.),
+			Some(ammo_kind.color()),
+			None,
+			vec![
+				comps::Effect::PickupItem { kind: kind },
+				comps::Effect::AddToScore { amount: 200 },
+			],
+		),
 	};
-	game_state::cache_scene(state, scene_name)?;
+	let real_scene = game_state::cache_scene(state, &scene_name)?;
 	let dir = Vector3::from_row_slice(&rand_distr::UnitSphere.sample(&mut rand::rng()));
 	let rot = safe_face_towards(dir);
 
-	let mut scene = comps::Scene::new_with_animation(scene_name, "Play");
+	let mut animation_states = HashMap::new();
+	for (i, obj) in real_scene.objects.iter().enumerate()
+	{
+		if obj.animations.contains_key("Play")
+		{
+			animation_states.insert(
+				i as i32,
+				comps::AnimationState {
+					speed: 1.,
+					state: scene::AnimationState::new("Play", false),
+				},
+			);
+		}
+	}
+
+	let mut scene = comps::Scene::new(&scene_name);
 	scene.color = scene_color;
+	scene.animation_states = animation_states;
 
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
@@ -902,6 +927,8 @@ pub fn spawn_gripper(
 	let kind = comps::GripperKind::Normal;
 	let scene_name = kind.scene_name();
 	game_state::cache_scene(state, comps::GripperKind::Plasma.scene_name())?;
+	game_state::cache_scene(state, comps::GripperKind::Explode.scene_name())?;
+	game_state::cache_scene(state, comps::GripperKind::BlackHole.scene_name())?;
 	game_state::cache_scene(state, scene_name)?;
 
 	let entity = world.spawn((
@@ -916,7 +943,7 @@ pub fn spawn_gripper(
 		.user_data(entity.to_bits().get() as u128)
 		.build();
 	let collider = ColliderBuilder::ball(0.2)
-		.restitution(0.8)
+		.restitution(0.7)
 		.mass(0.1)
 		.user_data(entity.to_bits().get() as u128)
 		.active_events(ActiveEvents::COLLISION_EVENTS)
@@ -929,6 +956,23 @@ pub fn spawn_gripper(
 	);
 
 	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
+	Ok(entity)
+}
+
+fn spawn_black_hole(
+	pos: Point3<f32>, world: &mut hecs::World, state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene_name = "data/black_hole.glb";
+	game_state::cache_scene(state, scene_name)?;
+	let entity = world.spawn((
+		comps::Position::new(pos, UnitQuaternion::identity()),
+		comps::Scene::new(scene_name),
+		comps::BlackHole {
+			spawn_time: state.hs.time,
+		},
+		comps::Light::new_dynamic(comps::GripperKind::BlackHole.color(), 300.),
+	));
 	Ok(entity)
 }
 
@@ -986,9 +1030,12 @@ pub fn spawn_explosion(
 {
 	let (color, scale) = match kind
 	{
-		comps::ExplosionKind::Small => (Color::from_rgb_f(1., 0.5, 0.), 0.2),
-		comps::ExplosionKind::Big => (Color::from_rgb_f(1., 0.5, 0.), 0.5),
+		comps::ExplosionKind::Small => (Color::from_rgb_f(1., 0.5, 0.), 0.5),
+		comps::ExplosionKind::Big => (Color::from_rgb_f(1., 0.5, 0.), 1.),
 		comps::ExplosionKind::Energy => (Color::from_rgb_f(0.5, 0.5, 1.), 0.2),
+		comps::ExplosionKind::Huge => (Color::from_rgb_f(1., 0.5, 0.), 2.),
+		comps::ExplosionKind::BlackHole => (Color::from_rgb_f(0.7, 0., 1.), 1.),
+		comps::ExplosionKind::Plasma => (Color::from_rgb_f(0., 1., 0.), 1.),
 	};
 	let scene_name = "data/explosion.glb";
 	let mut scene = comps::AdditiveScene::new(scene_name);
@@ -997,9 +1044,9 @@ pub fn spawn_explosion(
 	let dir = Vector3::from_row_slice(&rand_distr::UnitSphere.sample(&mut rand::rng()));
 	let rot = safe_face_towards(dir);
 	let entity = world.spawn((
-		comps::Position::new_scaled(pos, rot, Vector3::from_element(scale)),
+		comps::Position::new_scaled(pos, rot, Vector3::from_element(0.1)),
 		scene,
-		comps::ExplosionScaling::new(4.),
+		comps::ExplosionScaling::new(5. * scale),
 		comps::TimeToDie::new(state.hs.time() + 0.2 * scale as f64),
 		comps::Light::new_dynamic(color, scale * 500.),
 	));
@@ -1686,6 +1733,9 @@ impl Map
 		state.cache_bitmap("data/hud.png")?;
 		state.cache_bitmap("data/hud_key.png")?;
 		state.cache_bitmap("data/hud_gift.png")?;
+		state.cache_bitmap(comps::GripperKind::Plasma.hud_bitmap())?;
+		state.cache_bitmap(comps::GripperKind::Explode.hud_bitmap())?;
+		state.cache_bitmap(comps::GripperKind::BlackHole.hud_bitmap())?;
 
 		let mut physics = Physics::new();
 		let LevelProperties {
@@ -1861,6 +1911,7 @@ impl Map
 				let project = self.make_project_raw(
 					self.level_map.depth_output.get_width() as f32,
 					self.level_map.depth_output.get_height() as f32,
+					state.options.fov * PI,
 				);
 				let camera = self.make_camera(0.);
 
@@ -2143,7 +2194,7 @@ impl Map
 						if forward.dot(&dir) > 0.
 						{
 							if let Some((collider_handle, _)) = self.physics.ray_cast(
-								physics.handle,
+								Some(physics.handle),
 								position.pos,
 								dir,
 								ai.robot_desc.ai.sense_range,
@@ -2205,7 +2256,7 @@ impl Map
 
 						let visible = self
 							.physics
-							.ray_cast(physics.handle, position.pos, dir, 5.)
+							.ray_cast(Some(physics.handle), position.pos, dir, 5.)
 							.map(|(collider_handle, _)| {
 								hecs::Entity::from_bits(
 									self.physics.collider_set[collider_handle].user_data as u64,
@@ -2421,6 +2472,45 @@ impl Map
 			}
 		}
 
+		// BlackHole.
+		for (id, (position, light, _)) in self
+			.world
+			.query::<(&mut comps::Position, &mut comps::Light, &comps::BlackHole)>()
+			.iter()
+		{
+			let scale_change = 0.2 * DT;
+			let light_change = 50. * DT;
+			let radius = 5.;
+			if position.scale.norm() < scale_change
+			{
+				to_die.push(id);
+				continue;
+			}
+			position.scale -= Vector3::from_element(scale_change);
+			light.intensity -= light_change;
+
+			for collider_handle in self.physics.ball_query(None, position.pos, radius)
+			{
+				let collider = &self.physics.collider_set[collider_handle];
+				let diff = {
+					let body = &self.physics.rigid_body_set[collider.parent().unwrap()];
+					body.translation() - position.pos.coords
+				};
+
+				if let Some((test_collider_handle, _)) =
+					self.physics
+						.ray_cast(None, position.pos, diff.normalize(), radius)
+				{
+					if test_collider_handle == collider_handle
+					{
+						let frac = 1.0 - diff.norm() / radius;
+						let body = &mut self.physics.rigid_body_set[collider.parent().unwrap()];
+						body.add_force(-30. * frac * diff.normalize(), true);
+					}
+				}
+			}
+		}
+
 		// Physics.
 		let handler = PhysicsEventHandler::new();
 		self.physics.step(&handler);
@@ -2620,43 +2710,17 @@ impl Map
 											// This is an effect because we want to spawn the hit at a
 											// location before we attach it.
 											self.delayed_effects.push((
-												comps::Effect::ReattachGripper,
+												comps::Effect::ReattachGripper {
+													kind: gripper.kind,
+												},
 												id,
 												None,
 											));
 										}
 									}
 								}
-								comps::GripperKind::Plasma =>
-								{}
-								comps::GripperKind::Explode =>
-								{
-									effects.push((
-										comps::Effect::AreaDamage {
-											amount: 100.,
-											radius: 4.,
-											owner: gripper.parent,
-										},
-										id,
-										None,
-									));
-									effects.push((
-										comps::Effect::SpawnExplosion {
-											kind: comps::ExplosionKind::Big,
-										},
-										id,
-										None,
-									));
-									// This is an effect because we want to spawn the hit at a
-									// location before we attach it.
-									self.delayed_effects.push((
-										comps::Effect::ReattachGripper,
-										id,
-										None,
-									));
-								}
-								comps::GripperKind::BlackHole =>
-								{}
+								// The rest just kinda float about until recalled.
+								_ => (),
 							}
 						}
 					}
@@ -2753,8 +2817,16 @@ impl Map
 			{
 				if new_kind.in_inventory(&inventory)
 				{
-					self.messages
-						.add(&format!("{} grippers selected!", new_kind), state.hs.time);
+					if new_kind == comps::GripperKind::Normal
+					{
+						self.messages
+							.add(&format!("{} grippers selected!", new_kind), state.hs.time);
+					}
+					else
+					{
+						self.messages
+							.add(&format!("{} ammo selected!", new_kind), state.hs.time);
+					}
 					grippers.kind = new_kind;
 				}
 				else
@@ -2777,15 +2849,16 @@ impl Map
 
 		for (id, parent_position, gripper_id, power_level, force_attach, kind) in want_grip
 		{
-			let mut attach = false;
 			let gripper_offset;
 			{
 				let mut inventory = self.world.get::<&mut comps::Inventory>(id).unwrap();
 				let mut gripper_query = self
 					.world
-					.query_one::<(&comps::Physics, &mut comps::Gripper)>(gripper_id)
+					.query_one::<(&comps::Physics, &mut comps::Gripper, &comps::Position)>(
+						gripper_id,
+					)
 					.unwrap();
-				let (gripper_physics, gripper) = gripper_query.get().unwrap();
+				let (gripper_physics, gripper, position) = gripper_query.get().unwrap();
 				let (forward, _, _) = get_dirs(parent_position.rot);
 				gripper_offset = gripper.offset;
 				match gripper.status
@@ -2846,14 +2919,139 @@ impl Map
 						{
 							to_die.push(connector_id);
 						}
-						attach = true;
+						match gripper.kind
+						{
+							comps::GripperKind::Normal => (),
+							comps::GripperKind::Explode =>
+							{
+								effects.push((
+									comps::Effect::AreaDamage {
+										amount: 100.,
+										radius: 4.,
+										owner: gripper.parent,
+									},
+									gripper_id,
+									None,
+								));
+								effects.push((
+									comps::Effect::SpawnExplosion {
+										kind: comps::ExplosionKind::Huge,
+									},
+									gripper_id,
+									None,
+								));
+							}
+							comps::GripperKind::Plasma =>
+							{
+								effects.push((
+									comps::Effect::SpawnExplosion {
+										kind: comps::ExplosionKind::Plasma,
+									},
+									gripper_id,
+									None,
+								));
+
+								let radius = 8.;
+								let mut targets = vec![];
+								for collider_handle in
+									self.physics.ball_query(None, position.pos, radius)
+								{
+									let collider = &self.physics.collider_set[collider_handle];
+									let other_id =
+										hecs::Entity::from_bits(collider.user_data as u64).unwrap();
+									if other_id == id
+									{
+										continue;
+									}
+									let dir = {
+										let body = &self.physics.rigid_body_set
+											[collider.parent().unwrap()];
+										(body.translation() - position.pos.coords).normalize()
+									};
+
+									if let Some((test_collider_handle, _)) =
+										self.physics.ray_cast(None, position.pos, dir, radius)
+									{
+										if test_collider_handle == collider_handle
+											&& self.world.get::<&comps::Health>(other_id).is_ok()
+										{
+											targets.push((-dir, other_id));
+										}
+									}
+								}
+
+								let mut target_idx = 0;
+								for _ in 0..8
+								{
+									let (target_dir, target) = if targets.len() > 0
+									{
+										let (target_dir, target) =
+											targets[target_idx % targets.len()];
+										target_idx += 1;
+										(target_dir, Some(target))
+									}
+									else
+									{
+										let mut rng = rand::rng();
+										let target_dir = Vector3::<f64>::from_row_slice(
+											&rand_distr::UnitSphere.sample(&mut rng),
+										)
+										.cast::<f32>();
+										(target_dir, None)
+									};
+
+									let bullet_pos = position.pos;
+									spawn_fns.push(Box::new(
+										move |map, state| -> Result<hecs::Entity> {
+											let mut rng = rand::rng();
+											spawn_bullet(
+												"data/plasma_bullet.glb",
+												Color::from_rgb_f(0., 1., 0.),
+												20.,
+												target,
+												Color::from_rgb_f(0., 1., 0.),
+												bullet_pos,
+												safe_face_towards(
+													target_dir
+														+ 0.3
+															* Vector3::new(
+																rng.random_range(-1.0..=1.0),
+																rng.random_range(-1.0..=1.0),
+																rng.random_range(-1.0..=1.0),
+															)
+															.cast::<f32>(),
+												),
+												target_dir * 1.,
+												id,
+												&mut map.physics,
+												&mut map.world,
+												state,
+											)
+										},
+									));
+								}
+							}
+							comps::GripperKind::BlackHole =>
+							{
+								effects.push((
+									comps::Effect::SpawnExplosion {
+										kind: comps::ExplosionKind::BlackHole,
+									},
+									gripper_id,
+									None,
+								));
+								effects.push((comps::Effect::SpawnBlackHole, gripper_id, None));
+							}
+						}
+						// This is an effect because we want to spawn the stuff at a
+						// location before we attach it.
+						self.delayed_effects.push((
+							comps::Effect::ReattachGripper { kind: kind },
+							gripper_id,
+							None,
+						));
 					}
 				}
-			}
-			if attach
-			{
-				attach_gripper_to_parent(gripper_id, &self.world, &mut self.physics);
-				change_gripper_kind(gripper_id, &self.world, kind);
 			}
 		}
 
@@ -2952,7 +3150,7 @@ impl Map
 					if forward.dot(&dir) > 0.
 					{
 						if let Some((collider_handle, _)) = self.physics.ray_cast(
-							player_physics.handle,
+							Some(player_physics.handle),
 							player_position.pos,
 							dir,
 							std::f32::MAX,
@@ -3274,7 +3472,7 @@ impl Map
 								};
 
 								if let Some((test_collider_handle, _)) = self.physics.ray_cast(
-									physics.handle,
+									Some(physics.handle),
 									position.pos,
 									diff.normalize(),
 									radius,
@@ -3371,6 +3569,18 @@ impl Map
 						if let Some(src_pos) = src_pos
 						{
 							spawn_explosion(src_pos, kind, &mut self.world, state)?;
+						}
+					}
+					comps::Effect::SpawnBlackHole =>
+					{
+						let mut src_pos = None;
+						if let Ok(position) = self.world.get::<&comps::Position>(id)
+						{
+							src_pos = Some(position.pos);
+						}
+						if let Some(src_pos) = src_pos
+						{
+							spawn_black_hole(src_pos, &mut self.world, state)?;
 						}
 					}
 					comps::Effect::Open =>
@@ -3616,6 +3826,14 @@ impl Map
 											inventory.num_gifts.add(1, state.hs.time);
 										}
 									}
+									comps::ItemKind::Ammo { kind } =>
+									{
+										if let Ok(mut inventory) =
+											self.world.get::<&mut comps::Inventory>(self.player)
+										{
+											kind.add_to_inventory(&mut inventory);
+										}
+									}
 								}
 								to_die.push(id);
 							}
@@ -3652,7 +3870,7 @@ impl Map
 							}
 						}
 					}
-					comps::Effect::ReattachGripper =>
+					comps::Effect::ReattachGripper { kind } =>
 					{
 						let mut do_attach = false;
 						if let Ok(mut gripper) = self.world.get::<&mut comps::Gripper>(id)
@@ -3666,6 +3884,7 @@ impl Map
 						}
 						if do_attach
 						{
+							change_gripper_kind(id, &self.world, kind);
 							attach_gripper_to_parent(id, &self.world, &mut self.physics);
 						}
 					}
@@ -3748,16 +3967,17 @@ impl Map
 		Ok(None)
 	}
 
-	fn make_project_raw(&self, buffer_width: f32, buffer_height: f32) -> Perspective3<f32>
+	fn make_project_raw(&self, buffer_width: f32, buffer_height: f32, fov: f32)
+	-> Perspective3<f32>
 	{
-		Perspective3::new(buffer_width / buffer_height, PI / 3., 0.1, 100.)
+		Perspective3::new(buffer_width / buffer_height, fov, 0.1, 100.)
 	}
 
 	fn make_project(&self, state: &game_state::GameState) -> Perspective3<f32>
 	{
 		let dw = state.hs.buffer_width();
 		let dh = state.hs.buffer_height();
-		self.make_project_raw(dw, dh)
+		self.make_project_raw(dw, dh, state.options.fov * PI)
 	}
 
 	fn camera_pos(&self, alpha: f32) -> Point3<f32>
@@ -4320,6 +4540,18 @@ impl Map
 
 					if inventory.num_explode > 0
 					{
+						let hud_ammo =
+							state.get_bitmap(comps::GripperKind::Explode.hud_bitmap())?;
+						let hud_ammo_w = hud_ammo.get_width() as f32;
+						let hud_ammo_h = hud_ammo.get_height() as f32;
+
+						state.hs.core.draw_bitmap(
+							hud_ammo,
+							cx - 40. - hud_ammo_w / 2.,
+							bh - 16. - hud_ammo_h / 2.,
+							Flag::zero(),
+						);
+
 						state.hs.core.draw_text(
 							state.small_hud_font(),
 							Color::from_rgb_f(0.8, 0.8, 0.6),
@@ -4331,6 +4563,17 @@ impl Map
 					}
 					if inventory.num_plasma > 0
 					{
+						let hud_ammo = state.get_bitmap(comps::GripperKind::Plasma.hud_bitmap())?;
+						let hud_ammo_w = hud_ammo.get_width() as f32;
+						let hud_ammo_h = hud_ammo.get_height() as f32;
+
+						state.hs.core.draw_bitmap(
+							hud_ammo,
+							cx - hud_ammo_w / 2.,
+							bh - 16. - hud_ammo_h / 2.,
+							Flag::zero(),
+						);
+
 						state.hs.core.draw_text(
 							state.small_hud_font(),
 							Color::from_rgb_f(0.8, 0.8, 0.6),
@@ -4342,6 +4585,18 @@ impl Map
 					}
 					if inventory.num_black_hole > 0
 					{
+						let hud_ammo =
+							state.get_bitmap(comps::GripperKind::BlackHole.hud_bitmap())?;
+						let hud_ammo_w = hud_ammo.get_width() as f32;
+						let hud_ammo_h = hud_ammo.get_height() as f32;
+
+						state.hs.core.draw_bitmap(
+							hud_ammo,
+							cx + 40. - hud_ammo_w / 2.,
+							bh - 16. - hud_ammo_h / 2.,
+							Flag::zero(),
+						);
+
 						state.hs.core.draw_text(
 							state.small_hud_font(),
 							Color::from_rgb_f(0.8, 0.8, 0.6),

@@ -897,7 +897,7 @@ impl IntermissionMenu
 				ui::Widget::Label(ui::Label::new_align(
 					w,
 					h,
-					&format!("{:.1} km/h", mps_to_kph(map_stats.max_speed)),
+					&format!("{:.1} km/h", mps_to_kph(3. * map_stats.max_speed)),
 					FontAlign::Left,
 					THEME_LIGHT.clone(),
 				)),
@@ -906,14 +906,17 @@ impl IntermissionMenu
 				ui::Widget::Label(ui::Label::new_align(
 					w,
 					h,
-					"Max Punch Speed",
+					"Max Punch Energy",
 					FontAlign::Right,
 					THEME.clone(),
 				)),
 				ui::Widget::Label(ui::Label::new_align(
 					w,
 					h,
-					&format!("{:.1} m/s", map_stats.max_rel_speed),
+					&format!(
+						"{:.1} kJ",
+						500. * 0.5 * (3. * map_stats.max_rel_speed).powi(2) / 1000.
+					),
 					FontAlign::Left,
 					THEME_LIGHT.clone(),
 				)),
