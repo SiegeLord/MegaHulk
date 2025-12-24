@@ -338,6 +338,8 @@ pub struct AIDesc
 	pub max_range: f32,
 	pub min_range: f32,
 	pub sense_range: f32,
+	#[serde(default)]
+	pub evade_prob: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -345,6 +347,7 @@ pub struct AI
 {
 	pub state: AIState,
 	pub robot_desc: RobotDesc,
+	pub stop_evading: f64,
 }
 
 impl AI
@@ -354,6 +357,7 @@ impl AI
 		Self {
 			state: AIState::Idle,
 			robot_desc: robot_desc,
+			stop_evading: 0.,
 		}
 	}
 }
@@ -400,6 +404,8 @@ pub enum WeaponKind
 		scene: String,
 		color: [f32; 3],
 		speed: f32,
+		#[serde(default)]
+		homing: bool,
 	},
 	Melee,
 }
@@ -422,6 +428,7 @@ pub struct Weapon
 	pub cur_slot: i32,
 	pub slots: Vec<Vector3<f32>>,
 	pub desc: WeaponDesc,
+	pub target: Option<hecs::Entity>,
 }
 
 impl Weapon
@@ -433,6 +440,7 @@ impl Weapon
 			cur_shot: 0,
 			cur_slot: 0,
 			slots: slots.to_vec(),
+			target: None,
 			desc: desc,
 		}
 	}
@@ -770,11 +778,11 @@ impl StatValues
 		}
 	}
 
-	pub fn new_robot() -> Self
+	pub fn new_missile() -> Self
 	{
 		Self {
-			speed: 16.,
-			rot_speed: 3.,
+			speed: 0.7,
+			rot_speed: 12.,
 		}
 	}
 }
@@ -888,4 +896,10 @@ pub struct RobotDesc
 	pub weapon: WeaponDesc,
 	pub ai: AIDesc,
 	pub stats: StatValues,
+}
+
+#[derive(Debug, Clone)]
+pub struct HomeTowards
+{
+	pub target: hecs::Entity,
 }

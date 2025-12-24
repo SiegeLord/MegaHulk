@@ -360,7 +360,7 @@ pub fn spawn_robot(
 	let mut slots = vec![];
 	for obj in &scene.objects
 	{
-		if obj.name.starts_with("Slot1")
+		if obj.name.starts_with("Slot")
 		{
 			slots.push(obj.pos.coords);
 		}
@@ -978,9 +978,9 @@ pub fn spawn_explosion(
 }
 
 pub fn spawn_bullet(
-	scene_name: &str, color: Color, damage: f32, pos: Point3<f32>, rot: UnitQuaternion<f32>,
-	vel: Vector3<f32>, parent: hecs::Entity, physics: &mut Physics, world: &mut hecs::World,
-	state: &mut game_state::GameState,
+	scene_name: &str, color: Color, damage: f32, target: Option<hecs::Entity>, pos: Point3<f32>,
+	rot: UnitQuaternion<f32>, vel: Vector3<f32>, parent: hecs::Entity, physics: &mut Physics,
+	world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	game_state::cache_scene(state, scene_name)?;
@@ -1021,11 +1021,25 @@ pub fn spawn_bullet(
 		&mut physics.rigid_body_set,
 	);
 
-	physics
-		.rigid_body_set
-		.get_mut(ball_body_handle)
-		.unwrap()
-		.set_linvel(vel, true);
+	if let Some(target) = target
+	{
+		world.insert(
+			entity,
+			(
+				comps::Controller::new(),
+				comps::Stats::new(comps::StatValues::new_missile()),
+				comps::HomeTowards { target: target },
+			),
+		)?;
+	}
+	else
+	{
+		physics
+			.rigid_body_set
+			.get_mut(ball_body_handle)
+			.unwrap()
+			.set_linvel(vel, true);
+	}
 
 	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
 	Ok(entity)
@@ -2036,16 +2050,22 @@ impl Map
 		}
 
 		// AI.
-		for (_, (position, controller, physics, ai)) in self
+		for (_, (position, controller, weapon, physics, ai)) in self
 			.world
 			.query::<(
 				&comps::Position,
 				&mut comps::Controller,
+				&mut comps::Weapon,
 				&comps::Physics,
 				&mut comps::AI,
 			)>()
 			.iter()
 		{
+			if state.hs.time > ai.stop_evading
+			{
+				controller.want_move.x = 0.;
+				controller.want_move.y = 0.;
+			}
 			let mut new_state = None;
 			match ai.state
 			{
@@ -2078,6 +2098,7 @@ impl Map
 				comps::AIState::Attacking(target) =>
 				{
 					controller.want_fire = false;
+					weapon.target = None;
 					if let Ok(target_position) = self.world.get::<&comps::Position>(target)
 					{
 						let (forward, right, up) = get_dirs(position.rot);
@@ -2086,6 +2107,19 @@ impl Map
 						let rot_speed = 5.;
 						controller.want_rotate.x = rot_speed * dir.dot(&up);
 						controller.want_rotate.y = -rot_speed * dir.dot(&right);
+
+						if rand::rng().random_range(0.0..1.0) < (ai.robot_desc.ai.evade_prob * DT)
+						{
+							ai.stop_evading = state.hs.time + 1.;
+							match rand::rng().random_range(0..4)
+							{
+								0 => controller.want_move.x = -1.,
+								1 => controller.want_move.x = 1.,
+								2 => controller.want_move.y = -1.,
+								3 => controller.want_move.y = 1.,
+								_ => unreachable!(),
+							}
+						}
 
 						let visible = self
 							.physics
@@ -2114,6 +2148,7 @@ impl Map
 								else
 								{
 									controller.want_fire = true;
+									weapon.target = Some(target);
 								}
 							}
 							else
@@ -2235,6 +2270,7 @@ impl Map
 						scene,
 						color,
 						speed,
+						homing,
 					} =>
 					{
 						let (forward, _, _) = get_dirs(position.rot);
@@ -2242,6 +2278,8 @@ impl Map
 							position.pos + position.rot * weapon.slots[weapon.cur_slot as usize];
 						weapon.cur_slot = (weapon.cur_slot + 1) % weapon.slots.len() as i32;
 						let bullet_rot = position.rot;
+
+						let target = if *homing { weapon.target } else { None };
 
 						let scene = scene.clone();
 						let color = Color::from_rgb_f(color[0], color[1], color[2]);
@@ -2252,6 +2290,7 @@ impl Map
 								&scene,
 								color,
 								damage,
+								target,
 								bullet_pos,
 								bullet_rot,
 								speed * forward,
@@ -2276,7 +2315,7 @@ impl Map
 									amount: weapon.desc.damage,
 									owner: id,
 								},
-								other_id,
+								id,
 								Some(other_id),
 							));
 						}
@@ -2633,6 +2672,28 @@ impl Map
 			}
 		}
 
+		//  HomeTowards.
+		for (_, (position, controller, home_towards)) in self
+			.world
+			.query::<(
+				&comps::Position,
+				&mut comps::Controller,
+				&comps::HomeTowards,
+			)>()
+			.iter()
+		{
+			if let Ok(target_position) = self.world.get::<&comps::Position>(home_towards.target)
+			{
+				let (_, right, up) = get_dirs(position.rot);
+				let diff = target_position.pos - position.pos;
+				let dir = diff.normalize();
+				let rot_speed = 5.;
+				controller.want_rotate.x = rot_speed * dir.dot(&up);
+				controller.want_rotate.y = -rot_speed * dir.dot(&right);
+			}
+			controller.want_move.z = 1.;
+		}
+
 		//  FaceTowards.
 		let mut new_rot = vec![];
 		for (id, (position, face_towards)) in self
@@ -2951,16 +3012,21 @@ impl Map
 					}
 					comps::Effect::Damage { amount, owner } =>
 					{
-						if let Ok(mut health) =
-							self.world.get::<&mut comps::Health>(other_id.unwrap())
+						if let Some(other_id) = other_id
 						{
-							health.health -= amount;
-							health.damage_time = state.hs.time;
-							health.damaged_by = Some(owner);
-						}
-						if let Ok(mut ai) = self.world.get::<&mut comps::AI>(other_id.unwrap())
-						{
-							ai.state = comps::AIState::Attacking(owner);
+							if let Ok(mut health) = self.world.get::<&mut comps::Health>(other_id)
+							{
+								health.health -= amount;
+								health.damage_time = state.hs.time;
+								health.damaged_by = Some(owner);
+							}
+							if let Ok(mut ai) = self.world.get::<&mut comps::AI>(other_id)
+							{
+								if other_id != owner
+								{
+									ai.state = comps::AIState::Attacking(owner);
+								}
+							}
 						}
 					}
 					comps::Effect::GripperPierce { old_vel } =>
