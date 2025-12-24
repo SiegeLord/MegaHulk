@@ -19,10 +19,11 @@ use rapier3d::dynamics::{
 	RigidBodySet, SpringJointBuilder,
 };
 use rapier3d::geometry::{
-	ColliderBuilder, ColliderHandle, ColliderSet, CollisionEvent, ContactPair, DefaultBroadPhase,
-	Group, InteractionGroups, InteractionTestMode, NarrowPhase, Ray, SharedShape, TriMeshFlags,
+	Ball, ColliderBuilder, ColliderHandle, ColliderSet, CollisionEvent, ContactPair,
+	DefaultBroadPhase, Group, InteractionGroups, InteractionTestMode, NarrowPhase, Ray,
+	SharedShape, TriMeshFlags,
 };
-use rapier3d::pipeline::{ActiveEvents, EventHandler, PhysicsPipeline, QueryFilter};
+use rapier3d::pipeline::{ActiveEvents, EventHandler, PhysicsPipeline, QueryFilter, QueryPipeline};
 use serde_derive::{Deserialize, Serialize};
 use slhack::utils::ColorExt;
 use slhack::{controls, scene, sprite, ui as slhack_ui};
@@ -54,6 +55,16 @@ fn get_dirs(rot: UnitQuaternion<f32>) -> (Vector3<f32>, Vector3<f32>, Vector3<f3
 	let up = rot * Vector3::y();
 
 	(forward, right, up)
+}
+
+fn safe_face_towards(dir: Vector3<f32>) -> UnitQuaternion<f32>
+{
+	let mut up = Vector3::y();
+	if dir.dot(&up).abs() > 0.9999
+	{
+		up = Vector3::x();
+	}
+	UnitQuaternion::face_towards(&dir, &up)
 }
 
 pub struct PhysicsEventHandler
@@ -157,11 +168,9 @@ impl Physics
 		);
 	}
 
-	fn ray_cast(
-		&self, pos: Point3<f32>, dir: Vector3<f32>, source: RigidBodyHandle, range: f32,
-	) -> Option<(ColliderHandle, f32)>
+	fn make_query_pipeline(&self, source: RigidBodyHandle) -> QueryPipeline<'_>
 	{
-		let query_pipeline = self.broad_phase.as_query_pipeline(
+		self.broad_phase.as_query_pipeline(
 			self.narrow_phase.query_dispatcher(),
 			&self.rigid_body_set,
 			&self.collider_set,
@@ -172,10 +181,26 @@ impl Physics
 					BIG_GROUP | PLAYER_GROUP,
 					InteractionTestMode::And,
 				)),
-		);
+		)
+	}
 
+	fn ray_cast(
+		&self, source: RigidBodyHandle, pos: Point3<f32>, dir: Vector3<f32>, range: f32,
+	) -> Option<(ColliderHandle, f32)>
+	{
 		let ray = Ray::new(pos, dir);
-		query_pipeline.cast_ray(&ray, range, true)
+		self.make_query_pipeline(source).cast_ray(&ray, range, true)
+	}
+
+	fn ball_query(
+		&self, source: RigidBodyHandle, pos: Point3<f32>, radius: f32,
+	) -> Vec<ColliderHandle>
+	{
+		let ball = Ball::new(radius);
+		self.make_query_pipeline(source)
+			.intersect_shape(Isometry3::translation(pos.x, pos.y, pos.z), &ball)
+			.map(|(c, _)| c)
+			.collect()
 	}
 }
 
@@ -325,32 +350,43 @@ impl Game
 }
 
 pub fn spawn_robot(
-	pos: Point3<f32>, rot: UnitQuaternion<f32>, physics: &mut Physics, world: &mut hecs::World,
-	state: &mut game_state::GameState,
+	robot_desc: comps::RobotDesc, pos: Point3<f32>, rot: UnitQuaternion<f32>,
+	physics: &mut Physics, world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scene_name = "data/robot2.glb";
+	let scene_name = &robot_desc.scene;
 	let scene = game_state::cache_scene(state, scene_name)?;
+
+	let mut slots = vec![];
+	for obj in &scene.objects
+	{
+		if obj.name.starts_with("Slot1")
+		{
+			slots.push(obj.pos.coords);
+		}
+	}
 
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
 		comps::Scene::new(scene_name),
 		comps::Controller::new(),
-		comps::Health::new(5.),
-		comps::AI::new(),
-		comps::Weapon::new(Vector3::new(0., 0., -1.)),
-		comps::Stats::new(comps::StatValues::new_robot()),
+		comps::Health::new(robot_desc.health as f32),
+		comps::Weapon::new(robot_desc.weapon.clone(), &slots),
+		comps::Stats::new(robot_desc.stats.clone()),
 		comps::OnDeathEffects::new(&[
 			comps::Effect::SpawnExplosion {
 				kind: comps::ExplosionKind::Big,
 			},
 			comps::Effect::SpawnItem {
-				spawn_table: vec![(0.5, comps::ItemKind::Energy)],
+				spawn_table: robot_desc.spawn_table.clone(),
 			},
-			comps::Effect::AddToScore { amount: 1000 },
+			comps::Effect::AddToScore {
+				amount: robot_desc.score,
+			},
 			comps::Effect::RobotDestroyed,
 		]),
 		comps::Bob::new(0.001),
+		comps::AI::new(robot_desc.clone()),
 	));
 
 	let rigid_body = RigidBodyBuilder::dynamic()
@@ -366,7 +402,7 @@ pub fn spawn_robot(
 	{
 		let collider = ColliderBuilder::convex_hull(&vertices).ok_or_else(|| format!("Couldn't create convex hull for {}", scene_name))?
 			.restitution(0.1)
-			.density(1.0)
+			.density(robot_desc.density)
 			.friction(0.)
 			.user_data(entity.to_bits().get() as u128)
 			.collision_groups(InteractionGroups::new(BIG_GROUP, PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP, InteractionTestMode::And))
@@ -664,7 +700,7 @@ pub fn spawn_item(
 	};
 	game_state::cache_scene(state, scene_name)?;
 	let dir = Vector3::from_row_slice(&rand_distr::UnitSphere.sample(&mut rand::rng()));
-	let rot = UnitQuaternion::face_towards(&dir, &Vector3::y());
+	let rot = safe_face_towards(dir);
 
 	let mut scene = comps::Scene::new_with_animation(scene_name, "Play");
 	scene.color = scene_color;
@@ -930,7 +966,7 @@ pub fn spawn_explosion(
 	scene.color = color;
 	game_state::cache_scene(state, scene_name)?;
 	let dir = Vector3::from_row_slice(&rand_distr::UnitSphere.sample(&mut rand::rng()));
-	let rot = UnitQuaternion::face_towards(&dir, &Vector3::y());
+	let rot = safe_face_towards(dir);
 	let entity = world.spawn((
 		comps::Position::new_scaled(pos, rot, Vector3::from_element(scale)),
 		scene,
@@ -942,11 +978,11 @@ pub fn spawn_explosion(
 }
 
 pub fn spawn_bullet(
-	pos: Point3<f32>, rot: UnitQuaternion<f32>, vel: Vector3<f32>, parent: hecs::Entity,
-	physics: &mut Physics, world: &mut hecs::World, state: &mut game_state::GameState,
+	scene_name: &str, color: Color, damage: f32, pos: Point3<f32>, rot: UnitQuaternion<f32>,
+	vel: Vector3<f32>, parent: hecs::Entity, physics: &mut Physics, world: &mut hecs::World,
+	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scene_name = "data/gripper.glb";
 	game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
 		comps::Position::new(pos, rot),
@@ -954,12 +990,12 @@ pub fn spawn_bullet(
 		comps::OnCollideEffects::new(&[
 			comps::Effect::Die,
 			comps::Effect::Damage {
-				amount: 10.,
+				amount: damage,
 				owner: parent,
 			},
 			comps::Effect::SpawnHit,
 		]),
-		comps::Light::new_static(Color::from_rgb_f(1., 1., 0.), 100.),
+		comps::Light::new_dynamic(color, 100.),
 	));
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
@@ -989,7 +1025,7 @@ pub fn spawn_bullet(
 		.rigid_body_set
 		.get_mut(ball_body_handle)
 		.unwrap()
-		.apply_impulse(vel, true);
+		.set_linvel(vel, true);
 
 	world.insert_one(entity, comps::Physics::new(ball_body_handle))?;
 	Ok(entity)
@@ -1308,9 +1344,18 @@ fn spawn_level(
 				}
 				else if object.name.starts_with("Robot")
 				{
+					let desc_str = object
+						.properties
+						.as_object()
+						.and_then(|o| o.get("robot_desc"))
+						.and_then(|s| s.as_str())
+						.unwrap_or("data/robot1.cfg");
+
+					let robot_desc: comps::RobotDesc = utils::load_config(desc_str)?;
+
 					spawn_fns.push(Box::new(
 						move |physics, world, state| -> Result<hecs::Entity> {
-							spawn_robot(pos, rot, physics, world, state)
+							spawn_robot(robot_desc, pos, rot, physics, world, state)
 						},
 					));
 				}
@@ -1387,7 +1432,7 @@ fn set_connector_position(
 	let rot =
 		UnitQuaternion::from_axis_angle(&Unit::new_unchecked(dir), 5. * state.hs.time() as f32);
 	let new_pos = ((start_pos.coords + end_pos.coords) / 2.0).into();
-	let new_rot = rot * UnitQuaternion::face_towards(&dir, &Vector3::y());
+	let new_rot = rot * safe_face_towards(dir);
 	let new_scale = Vector3::new(1., 1., (start_pos - end_pos).norm() / 2.);
 
 	position.pos = new_pos;
@@ -2012,8 +2057,12 @@ impl Map
 						let (forward, _, _) = get_dirs(position.rot);
 						if forward.dot(&dir) > 0.
 						{
-							if let Some((collider_handle, _)) =
-								self.physics.ray_cast(position.pos, dir, physics.handle, 5.)
+							if let Some((collider_handle, _)) = self.physics.ray_cast(
+								physics.handle,
+								position.pos,
+								dir,
+								ai.robot_desc.ai.sense_range,
+							)
 							{
 								let collider =
 									self.physics.collider_set.get(collider_handle).unwrap();
@@ -2040,7 +2089,7 @@ impl Map
 
 						let visible = self
 							.physics
-							.ray_cast(position.pos, dir, physics.handle, 5.)
+							.ray_cast(physics.handle, position.pos, dir, 5.)
 							.map(|(collider_handle, _)| {
 								hecs::Entity::from_bits(
 									self.physics.collider_set[collider_handle].user_data as u64,
@@ -2050,15 +2099,15 @@ impl Map
 							.unwrap_or(false);
 
 						controller.want_move.z = 0.;
-						if dir.dot(&forward) > 0.99
+						if dir.dot(&forward) > 0.9
 						{
 							if visible
 							{
-								if diff.norm() > 5.
+								if diff.norm() > ai.robot_desc.ai.max_range
 								{
 									controller.want_move.z = 1.;
 								}
-								else if diff.norm() < 3.
+								else if diff.norm() < ai.robot_desc.ai.min_range
 								{
 									controller.want_move.z = -1.;
 								}
@@ -2137,28 +2186,102 @@ impl Map
 		}
 
 		// Weapons.
-		for (id, (controller, weapon, position)) in self
+		for (id, (controller, weapon, position, scene, physics)) in self
 			.world
-			.query::<(&comps::Controller, &mut comps::Weapon, &comps::Position)>()
+			.query::<(
+				&comps::Controller,
+				&mut comps::Weapon,
+				&comps::Position,
+				&mut comps::Scene,
+				&comps::Physics,
+			)>()
 			.iter()
 		{
+			if state.hs.time > weapon.time_to_fire + weapon.desc.reset_time
+			{
+				weapon.cur_slot = 0;
+				weapon.cur_shot = 0;
+			}
 			if controller.want_fire && state.hs.time > weapon.time_to_fire
 			{
-				weapon.time_to_fire = state.hs.time + weapon.fire_delay;
-				let (forward, _, _) = get_dirs(position.rot);
-				let bullet_pos = position.pos + position.rot * weapon.offset;
-				let bullet_rot = position.rot;
-				spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
-					spawn_bullet(
-						bullet_pos,
-						bullet_rot,
-						forward,
-						id,
-						&mut map.physics,
-						&mut map.world,
-						state,
-					)
-				}));
+				let real_scene = state.get_scene(&scene.scene)?;
+				let mut animation_states = HashMap::new();
+				for (i, obj) in real_scene.objects.iter().enumerate()
+				{
+					if obj.animations.contains_key("Attack")
+					{
+						animation_states.insert(
+							i as i32,
+							comps::AnimationState {
+								speed: 1.,
+								state: scene::AnimationState::new("Attack", true),
+							},
+						);
+					}
+				}
+				scene.animation_states = animation_states;
+
+				weapon.time_to_fire =
+					state.hs.time + weapon.desc.fire_delay[weapon.cur_shot as usize];
+				weapon.cur_shot = (weapon.cur_shot + 1) % weapon.desc.fire_delay.len() as i32;
+				let scene_name = &scene.scene;
+				if weapon.slots.is_empty()
+				{
+					return Err(format!("No slots in {}", scene_name))?;
+				}
+				match &weapon.desc.kind
+				{
+					comps::WeaponKind::Bullet {
+						scene,
+						color,
+						speed,
+					} =>
+					{
+						let (forward, _, _) = get_dirs(position.rot);
+						let bullet_pos =
+							position.pos + position.rot * weapon.slots[weapon.cur_slot as usize];
+						weapon.cur_slot = (weapon.cur_slot + 1) % weapon.slots.len() as i32;
+						let bullet_rot = position.rot;
+
+						let scene = scene.clone();
+						let color = Color::from_rgb_f(color[0], color[1], color[2]);
+						let speed = *speed;
+						let damage = weapon.desc.damage;
+						spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
+							spawn_bullet(
+								&scene,
+								color,
+								damage,
+								bullet_pos,
+								bullet_rot,
+								speed * forward,
+								id,
+								&mut map.physics,
+								&mut map.world,
+								state,
+							)
+						}));
+					}
+					comps::WeaponKind::Melee =>
+					{
+						let damage_pos = position.pos + position.rot * weapon.slots[0];
+						for collider_handle in
+							&self.physics.ball_query(physics.handle, damage_pos, 0.5)
+						{
+							let collider = &self.physics.collider_set[*collider_handle];
+							let other_id =
+								hecs::Entity::from_bits(collider.user_data as u64).unwrap();
+							effects.push((
+								comps::Effect::Damage {
+									amount: weapon.desc.damage,
+									owner: id,
+								},
+								other_id,
+								Some(other_id),
+							));
+						}
+					}
+				}
 			}
 		}
 
@@ -2523,10 +2646,7 @@ impl Map
 			}
 			new_rot.push((
 				id,
-				UnitQuaternion::face_towards(
-					&-(face_towards.last_pos - position.pos),
-					&Vector3::y_axis(),
-				),
+				safe_face_towards(-(face_towards.last_pos - position.pos)),
 			));
 		}
 		for (id, new_rot) in new_rot
@@ -2556,9 +2676,9 @@ impl Map
 					if forward.dot(&dir) > 0.
 					{
 						if let Some((collider_handle, _)) = self.physics.ray_cast(
+							player_physics.handle,
 							player_position.pos,
 							dir,
-							player_physics.handle,
 							std::f32::MAX,
 						)
 						{
@@ -2887,7 +3007,7 @@ impl Map
 						if let (Some(src_pos), Some(dest_pos)) = (src_pos, dest_pos)
 						{
 							let dir = (dest_pos - src_pos).normalize();
-							let rot = UnitQuaternion::face_towards(&dir, &Vector3::y());
+							let rot = safe_face_towards(dir);
 							spawn_hit(src_pos + 0.3 * dir, rot, &mut self.world, state)?;
 						}
 					}

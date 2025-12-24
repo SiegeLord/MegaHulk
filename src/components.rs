@@ -2,7 +2,9 @@ use allegro::*;
 use nalgebra::{Point3, Quaternion, Unit, Vector3};
 use rand::prelude::*;
 use rapier3d::dynamics::ImpulseJointHandle;
+use serde_derive::{Deserialize, Serialize};
 use slhack::{scene, sprite};
+
 use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone)]
@@ -330,18 +332,28 @@ pub enum AIState
 	Attacking(hecs::Entity),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AIDesc
+{
+	pub max_range: f32,
+	pub min_range: f32,
+	pub sense_range: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct AI
 {
 	pub state: AIState,
+	pub robot_desc: RobotDesc,
 }
 
 impl AI
 {
-	pub fn new() -> Self
+	pub fn new(robot_desc: RobotDesc) -> Self
 	{
 		Self {
 			state: AIState::Idle,
+			robot_desc: robot_desc,
 		}
 	}
 }
@@ -380,22 +392,48 @@ impl Health
 	}
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WeaponKind
+{
+	Bullet
+	{
+		scene: String,
+		color: [f32; 3],
+		speed: f32,
+	},
+	Melee,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeaponDesc
+{
+	pub fire_delay: Vec<f64>,
+	pub damage: f32,
+	pub kind: WeaponKind,
+	#[serde(default)]
+	pub reset_time: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Weapon
 {
 	pub time_to_fire: f64,
-	pub fire_delay: f64,
-	pub offset: Vector3<f32>,
+	pub cur_shot: i32,
+	pub cur_slot: i32,
+	pub slots: Vec<Vector3<f32>>,
+	pub desc: WeaponDesc,
 }
 
 impl Weapon
 {
-	pub fn new(offset: Vector3<f32>) -> Self
+	pub fn new(desc: WeaponDesc, slots: &[Vector3<f32>]) -> Self
 	{
 		Self {
 			time_to_fire: 0.0,
-			fire_delay: 1.5,
-			offset: offset,
+			cur_shot: 0,
+			cur_slot: 0,
+			slots: slots.to_vec(),
+			desc: desc,
 		}
 	}
 }
@@ -408,7 +446,7 @@ pub enum ExplosionKind
 	Energy,
 }
 
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KeyKind
 {
 	Red,
@@ -453,7 +491,7 @@ impl std::fmt::Display for KeyKind
 	}
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ItemKind
 {
 	Energy,
@@ -715,7 +753,7 @@ impl TimeToDie
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatValues
 {
 	pub speed: f32,
@@ -837,4 +875,17 @@ impl Bob
 			phase: rand::rng().random_range(0.0..2.0 * std::f64::consts::PI),
 		}
 	}
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RobotDesc
+{
+	pub scene: String,
+	pub score: i32,
+	pub density: f32,
+	pub health: i32,
+	pub spawn_table: Vec<(f32, ItemKind)>,
+	pub weapon: WeaponDesc,
+	pub ai: AIDesc,
+	pub stats: StatValues,
 }
