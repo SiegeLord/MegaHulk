@@ -936,18 +936,18 @@ pub fn spawn_connector(
 }
 
 pub fn spawn_hit(
-	pos: Point3<f32>, rot: UnitQuaternion<f32>, world: &mut hecs::World,
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, size: f32, color: Color, world: &mut hecs::World,
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	let scene_name = "data/hit.glb";
 	let mut scene = comps::AdditiveScene::new(scene_name);
-	scene.color = Color::from_rgb_f(0.5, 0.5, 0.);
+	scene.color = color;
 	game_state::cache_scene(state, scene_name)?;
 	let entity = world.spawn((
-		comps::Position::new_scaled(pos, rot, Vector3::from_element(0.1)),
+		comps::Position::new_scaled(pos, rot, Vector3::from_element(size)),
 		scene,
-		comps::Light::new_dynamic(Color::from_rgb_f(0.5, 0.5, 0.), 500.),
+		comps::Light::new_dynamic(color, size * 500.),
 		comps::ExplosionScaling::new(4.),
 		comps::TimeToDie::new(state.hs.time() + 0.2),
 	));
@@ -982,9 +982,9 @@ pub fn spawn_explosion(
 }
 
 pub fn spawn_bullet(
-	scene_name: &str, color: Color, damage: f32, target: Option<hecs::Entity>, pos: Point3<f32>,
-	rot: UnitQuaternion<f32>, vel: Vector3<f32>, parent: hecs::Entity, physics: &mut Physics,
-	world: &mut hecs::World, state: &mut game_state::GameState,
+	scene_name: &str, color: Color, damage: f32, target: Option<hecs::Entity>, hit_color: Color,
+	pos: Point3<f32>, rot: UnitQuaternion<f32>, vel: Vector3<f32>, parent: hecs::Entity,
+	physics: &mut Physics, world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
 	game_state::cache_scene(state, scene_name)?;
@@ -997,10 +997,16 @@ pub fn spawn_bullet(
 				amount: damage,
 				owner: parent,
 			},
-			comps::Effect::SpawnHit,
+			comps::Effect::SpawnHit {
+				size: 0.1,
+				color: hit_color,
+			},
 		]),
-		comps::Light::new_dynamic(color, 100.),
 	));
+	if color != Color::from_rgb_f(0., 0., 0.)
+	{
+		world.insert_one(entity, comps::Light::new_dynamic(color, 100.))?;
+	}
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
 		.rotation(rot.scaled_axis())
@@ -2290,6 +2296,7 @@ impl Map
 				{
 					comps::WeaponKind::Bullet {
 						scene,
+						hit_color,
 						color,
 						speed,
 						homing,
@@ -2305,14 +2312,26 @@ impl Map
 
 						let scene = scene.clone();
 						let color = Color::from_rgb_f(color[0], color[1], color[2]);
+						let hit_color = Color::from_rgb_f(hit_color[0], hit_color[1], hit_color[2]);
 						let speed = *speed;
 						let damage = weapon.desc.damage;
+						spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
+							spawn_hit(
+								bullet_pos,
+								bullet_rot,
+								0.05,
+								hit_color,
+								&mut map.world,
+								state,
+							)
+						}));
 						spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
 							spawn_bullet(
 								&scene,
 								color,
 								damage,
 								target,
+								hit_color,
 								bullet_pos,
 								bullet_rot,
 								speed * forward,
@@ -2498,7 +2517,14 @@ impl Map
 										id,
 										Some(other_id),
 									));
-									effects.push((comps::Effect::SpawnHit, id, Some(other_id)));
+									effects.push((
+										comps::Effect::SpawnHit {
+											size: 0.1,
+											color: Color::from_rgb_f(1., 1., 1.),
+										},
+										id,
+										Some(other_id),
+									));
 									self.delayed_effects.push((
 										comps::Effect::GripperPierce {
 											old_vel: 0.75 * gripper_vel,
@@ -2511,7 +2537,14 @@ impl Map
 								{
 									if self.world.get::<&comps::Door>(other_id).is_ok()
 									{
-										effects.push((comps::Effect::SpawnHit, id, Some(other_id)));
+										effects.push((
+											comps::Effect::SpawnHit {
+												size: 0.1,
+												color: Color::from_rgb_f(1., 1., 1.),
+											},
+											id,
+											Some(other_id),
+										));
 									}
 									// This is an effect because we want to spawn the hit at a
 									// location before we attach it.
@@ -3086,7 +3119,7 @@ impl Map
 							}
 						}
 					}
-					comps::Effect::SpawnHit =>
+					comps::Effect::SpawnHit { color, size } =>
 					{
 						let mut src_pos = None;
 						if let Ok(position) = self.world.get::<&comps::Position>(id)
@@ -3102,7 +3135,14 @@ impl Map
 						{
 							let dir = (dest_pos - src_pos).normalize();
 							let rot = safe_face_towards(dir);
-							spawn_hit(src_pos + 0.3 * dir, rot, &mut self.world, state)?;
+							spawn_hit(
+								src_pos + 0.3 * dir,
+								rot,
+								size,
+								color,
+								&mut self.world,
+								state,
+							)?;
 						}
 					}
 					comps::Effect::SpawnExplosion { kind } =>

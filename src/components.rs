@@ -404,6 +404,7 @@ pub enum WeaponKind
 	{
 		scene: String,
 		color: [f32; 3],
+		hit_color: [f32; 3],
 		speed: f32,
 		#[serde(default)]
 		homing: bool,
@@ -557,7 +558,11 @@ pub enum Effect
 	{
 		old_vel: Vector3<f32>,
 	},
-	SpawnHit,
+	SpawnHit
+	{
+		size: f32,
+		color: Color,
+	},
 	SpawnExplosion
 	{
 		kind: ExplosionKind,
