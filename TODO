@@ -1,11 +1,15 @@
 Modeling
-    - Rocket robot
-    - Boss robot
     - Reactor
     - Robot 1 bullets
     - Robot 2 bullets
     - Robot 3 bullets
     - Robot 4 bullets
+    - Light doodad
+    - Grate doodad
+    - Exit door
+    - Secret door
+    - Title
+    - Ammo
 
 HUD
     - Ammo stuff

@@ -325,11 +325,12 @@ impl Connector
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AIState
 {
 	Idle,
 	Attacking(hecs::Entity),
+	TurnTowards(hecs::Entity),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

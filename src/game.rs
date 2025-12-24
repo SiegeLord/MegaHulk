@@ -168,19 +168,22 @@ impl Physics
 		);
 	}
 
-	fn make_query_pipeline(&self, source: RigidBodyHandle) -> QueryPipeline<'_>
+	fn make_query_pipeline(&self, source: Option<RigidBodyHandle>) -> QueryPipeline<'_>
 	{
+		let mut query_filter = QueryFilter::default().groups(InteractionGroups::new(
+			BIG_GROUP,
+			BIG_GROUP | PLAYER_GROUP,
+			InteractionTestMode::And,
+		));
+		if let Some(source) = source
+		{
+			query_filter = query_filter.exclude_rigid_body(source);
+		}
 		self.broad_phase.as_query_pipeline(
 			self.narrow_phase.query_dispatcher(),
 			&self.rigid_body_set,
 			&self.collider_set,
-			QueryFilter::default()
-				.exclude_rigid_body(source)
-				.groups(InteractionGroups::new(
-					BIG_GROUP,
-					BIG_GROUP | PLAYER_GROUP,
-					InteractionTestMode::And,
-				)),
+			query_filter,
 		)
 	}
 
@@ -189,11 +192,12 @@ impl Physics
 	) -> Option<(ColliderHandle, f32)>
 	{
 		let ray = Ray::new(pos, dir);
-		self.make_query_pipeline(source).cast_ray(&ray, range, true)
+		self.make_query_pipeline(Some(source))
+			.cast_ray(&ray, range, true)
 	}
 
 	fn ball_query(
-		&self, source: RigidBodyHandle, pos: Point3<f32>, radius: f32,
+		&self, source: Option<RigidBodyHandle>, pos: Point3<f32>, radius: f32,
 	) -> Vec<ColliderHandle>
 	{
 		let ball = Ball::new(radius);
@@ -421,7 +425,7 @@ pub fn spawn_reactor(
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scene_name = "data/megahulk.glb";
+	let scene_name = "data/reactor.glb";
 	let scene = game_state::cache_scene(state, scene_name)?;
 
 	let mut health = comps::Health::new(35.);
@@ -957,7 +961,7 @@ pub fn spawn_explosion(
 {
 	let (color, scale) = match kind
 	{
-		comps::ExplosionKind::Small => (Color::from_rgb_f(1., 0.5, 0.), 0.1),
+		comps::ExplosionKind::Small => (Color::from_rgb_f(1., 0.5, 0.), 0.2),
 		comps::ExplosionKind::Big => (Color::from_rgb_f(1., 0.5, 0.), 0.5),
 		comps::ExplosionKind::Energy => (Color::from_rgb_f(0.5, 0.5, 1.), 0.2),
 	};
@@ -2050,6 +2054,7 @@ impl Map
 		}
 
 		// AI.
+		let mut wake_up_near = vec![];
 		for (_, (position, controller, weapon, physics, ai)) in self
 			.world
 			.query::<(
@@ -2089,9 +2094,26 @@ impl Map
 								if hecs::Entity::from_bits(collider.user_data as u64).unwrap()
 									== self.player
 								{
-									new_state = Some(comps::AIState::Attacking(self.player))
+									new_state = Some(comps::AIState::Attacking(self.player));
+									wake_up_near.push((position.pos, self.player));
 								}
 							}
+						}
+					}
+				}
+				comps::AIState::TurnTowards(target) =>
+				{
+					if let Ok(target_position) = self.world.get::<&comps::Position>(target)
+					{
+						let (forward, right, up) = get_dirs(position.rot);
+						let diff = target_position.pos - position.pos;
+						let dir = diff.normalize();
+						let rot_speed = 5.;
+						controller.want_rotate.x = rot_speed * dir.dot(&up);
+						controller.want_rotate.y = -rot_speed * dir.dot(&right);
+						if dir.dot(&forward) > 0.5
+						{
+							new_state = Some(comps::AIState::Idle);
 						}
 					}
 				}
@@ -2305,7 +2327,9 @@ impl Map
 					{
 						let damage_pos = position.pos + position.rot * weapon.slots[0];
 						for collider_handle in
-							&self.physics.ball_query(physics.handle, damage_pos, 0.5)
+							&self
+								.physics
+								.ball_query(Some(physics.handle), damage_pos, 0.5)
 						{
 							let collider = &self.physics.collider_set[*collider_handle];
 							let other_id =
@@ -2545,7 +2569,6 @@ impl Map
 					health.health -= 10.;
 					health.damage_time = state.hs.time;
 					grippers.last_kill_time = state.hs.time;
-					grippers.power_level += 0.1;
 				}
 			}
 			for (want_gripper, gripper_id) in
@@ -2937,7 +2960,7 @@ impl Map
 					.and_then(|other_id| self.world.get::<&mut comps::Grippers>(other_id).ok())
 				{
 					grippers.last_kill_time = state.hs.time();
-					grippers.power_level += 0.5;
+					grippers.power_level += 0.1;
 				}
 			}
 		}
@@ -3020,11 +3043,16 @@ impl Map
 								health.damage_time = state.hs.time;
 								health.damaged_by = Some(owner);
 							}
-							if let Ok(mut ai) = self.world.get::<&mut comps::AI>(other_id)
+							if let Some((position, ai)) = self
+								.world
+								.query_one::<(&comps::Position, &mut comps::AI)>(other_id)
+								.unwrap()
+								.get()
 							{
 								if other_id != owner
 								{
 									ai.state = comps::AIState::Attacking(owner);
+									wake_up_near.push((position.pos, self.player));
 								}
 							}
 						}
@@ -3416,6 +3444,23 @@ impl Map
 				}
 			}
 			effects = new_effects;
+		}
+
+		for (pos, target) in wake_up_near
+		{
+			for collider_handle in self.physics.ball_query(None, pos, 10.)
+			{
+				let collider = &self.physics.collider_set[collider_handle];
+				if let Ok(mut ai) = self.world.get::<&mut comps::AI>(
+					hecs::Entity::from_bits(collider.user_data as u64).unwrap(),
+				)
+				{
+					if ai.state == comps::AIState::Idle
+					{
+						ai.state = comps::AIState::TurnTowards(target);
+					}
+				}
+			}
 		}
 
 		// Remove dead entities
