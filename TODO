@@ -5,10 +5,19 @@ Modeling
     - Exit door
     - Secret door
 
+UI:
     - Title
-    - Spawn animation
+    - Final screen
 
-Final screen
+
+
+
+
+
+
+
+
+
 
 Map
     Still some leakage through closed doors...

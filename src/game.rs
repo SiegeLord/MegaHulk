@@ -813,6 +813,8 @@ pub fn spawn_player(
 	state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
+	spawn_spawn(pos, rot, world, state)?;
+
 	let scene_name = "data/megahulk.glb";
 	let scene = game_state::cache_scene(state, scene_name)?;
 
@@ -1001,6 +1003,38 @@ pub fn spawn_connector(
 	);
 
 	let entity = world.spawn((position, connector, scene));
+	Ok(entity)
+}
+
+pub fn spawn_spawn(
+	pos: Point3<f32>, rot: Unit<Quaternion<f32>>, world: &mut hecs::World,
+	state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene_name = "data/spawn.glb";
+	let real_scene = game_state::cache_scene(state, scene_name)?;
+	let mut animation_states = HashMap::new();
+	for (i, obj) in real_scene.objects.iter().enumerate()
+	{
+		if obj.animations.contains_key("Play")
+		{
+			animation_states.insert(
+				i as i32,
+				comps::AnimationState {
+					speed: 2.,
+					state: scene::AnimationState::new("Play", false),
+				},
+			);
+		}
+	}
+	let mut scene = comps::AdditiveScene::new(scene_name);
+	scene.animation_states = animation_states;
+	let entity = world.spawn((
+		comps::Position::new(pos, rot),
+		scene,
+		comps::Light::new_dynamic(Color::from_rgb_f(0.5, 0.5, 1.), 500.),
+		comps::TimeToDie::new(state.hs.time() + 0.5),
+	));
 	Ok(entity)
 }
 
@@ -3214,6 +3248,17 @@ impl Map
 				);
 			}
 		}
+		for (_, scene) in self.world.query::<&mut comps::AdditiveScene>().iter()
+		{
+			let the_scene = state.get_scene(&scene.scene)?;
+			for (obj_idx, animation_state) in &mut scene.animation_states
+			{
+				the_scene.objects[*obj_idx as usize].advance_state(
+					&mut animation_state.state,
+					(animation_state.speed * DT) as f64,
+				);
+			}
+		}
 
 		// Connector upkeep
 		let mut connector_ends = vec![];
@@ -3733,7 +3778,7 @@ impl Map
 					}
 					comps::Effect::SpawnDeathCamera =>
 					{
-						self.messages.add("Hulk destroyed!", state.hs.time);
+						self.messages.add("MegaHulk destroyed!", state.hs.time);
 						if let Ok(mut scene) = self.world.get::<&mut comps::Scene>(self.player)
 						{
 							scene.visible = true;
