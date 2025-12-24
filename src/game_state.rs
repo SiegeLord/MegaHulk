@@ -74,10 +74,13 @@ pub enum Action
 	GripLeft,
 	GripRight,
 	Enrage,
-	Pause,
 	Map,
 	ZoomIn,
 	ZoomOut,
+	SelectNormal,
+	SelectPlasma,
+	SelectBlackHole,
+	SelectExplode,
 }
 
 impl controls::Action for Action
@@ -97,10 +100,13 @@ impl controls::Action for Action
 			Action::GripLeft => "Grip Left",
 			Action::GripRight => "Grip Right",
 			Action::Enrage => "Enrage",
-			Action::Pause => "Pause",
 			Action::Map => "Map",
 			Action::ZoomIn => "Zoom In",
 			Action::ZoomOut => "Zoom Out",
+			Action::SelectNormal => "Select Grippers",
+			Action::SelectPlasma => "Select Plasma",
+			Action::SelectBlackHole => "Select Black Hole",
+			Action::SelectExplode => "Select Explode",
 		}
 	}
 }
@@ -149,16 +155,29 @@ pub fn new_game_controls() -> controls::Controls<Action>
 	);
 
 	action_to_inputs.insert(
-		Action::Pause,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::P)), None],
-	);
-	action_to_inputs.insert(
 		Action::Map,
 		[Some(controls::Input::Keyboard(allegro::KeyCode::Tab)), None],
 	);
 
 	action_to_inputs.insert(Action::ZoomIn, [Some(controls::Input::MouseZPos), None]);
 	action_to_inputs.insert(Action::ZoomOut, [Some(controls::Input::MouseZNeg), None]);
+
+	action_to_inputs.insert(
+		Action::SelectNormal,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::_1)), None],
+	);
+	action_to_inputs.insert(
+		Action::SelectExplode,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::_2)), None],
+	);
+	action_to_inputs.insert(
+		Action::SelectPlasma,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::_3)), None],
+	);
+	action_to_inputs.insert(
+		Action::SelectBlackHole,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::_4)), None],
+	);
 
 	controls::Controls::new(action_to_inputs)
 }

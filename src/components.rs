@@ -228,6 +228,10 @@ pub struct Controller
 	pub want_fire: bool,
 	pub force_attach: bool,
 	pub want_enrage: bool,
+	pub want_normal: bool,
+	pub want_plasma: bool,
+	pub want_black_hole: bool,
+	pub want_explode: bool,
 }
 
 impl Controller
@@ -241,6 +245,10 @@ impl Controller
 			want_fire: false,
 			force_attach: false,
 			want_enrage: false,
+			want_normal: false,
+			want_plasma: false,
+			want_black_hole: false,
+			want_explode: false,
 		}
 	}
 }
@@ -253,6 +261,81 @@ pub enum GripperStatus
 	Flying,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum GripperKind
+{
+	Normal,
+	Explode,
+	BlackHole,
+	Plasma,
+}
+
+impl GripperKind
+{
+	pub fn scene_name(&self) -> &str
+	{
+		match self
+		{
+			GripperKind::Normal => "data/gripper.glb",
+			GripperKind::Plasma => "data/plasma_gripper.glb",
+			GripperKind::Explode => "data/plasma_gripper.glb",
+			GripperKind::BlackHole => "data/plasma_gripper.glb",
+		}
+	}
+
+	pub fn in_inventory(&self, inventory: &Inventory) -> bool
+	{
+		match self
+		{
+			GripperKind::Normal => true,
+			GripperKind::Plasma => inventory.num_plasma > 0,
+			GripperKind::Explode => inventory.num_explode > 0,
+			GripperKind::BlackHole => inventory.num_black_hole > 0,
+		}
+	}
+
+	pub fn take_from_inventory(&self, inventory: &mut Inventory) -> bool
+	{
+		if !self.in_inventory(inventory)
+		{
+			return false;
+		}
+		match self
+		{
+			GripperKind::Normal => (),
+			GripperKind::Plasma => inventory.num_plasma -= 1,
+			GripperKind::Explode => inventory.num_explode -= 1,
+			GripperKind::BlackHole => inventory.num_black_hole -= 1,
+		};
+		true
+	}
+
+	pub fn color(&self) -> Color
+	{
+		match self
+		{
+			GripperKind::Normal => Color::from_rgb_f(0., 1., 1.),
+			GripperKind::Plasma => Color::from_rgb_f(0., 1., 0.),
+			GripperKind::Explode => Color::from_rgb_f(1., 0.5, 0.),
+			GripperKind::BlackHole => Color::from_rgb_f(0.5, 0., 1.),
+		}
+	}
+}
+
+impl std::fmt::Display for GripperKind
+{
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+	{
+		match self
+		{
+			Self::Normal => write!(f, "Normal"),
+			Self::Plasma => write!(f, "Plasma"),
+			Self::Explode => write!(f, "Explode"),
+			Self::BlackHole => write!(f, "Black Hole"),
+		}
+	}
+}
+
 #[derive(Debug, Clone)]
 pub struct Gripper
 {
@@ -263,6 +346,7 @@ pub struct Gripper
 	pub attach_joint: Option<ImpulseJointHandle>,
 	pub spring_joint: Option<ImpulseJointHandle>,
 	pub connector: Option<hecs::Entity>,
+	pub kind: GripperKind,
 }
 
 impl Gripper
@@ -277,6 +361,7 @@ impl Gripper
 			attach_joint: None,
 			spring_joint: None,
 			connector: None,
+			kind: GripperKind::Normal,
 		}
 	}
 }
@@ -287,6 +372,7 @@ pub struct Grippers
 	pub grippers: [hecs::Entity; 2],
 	pub power_level: f32,
 	pub last_kill_time: f64,
+	pub kind: GripperKind,
 }
 
 impl Grippers
@@ -297,6 +383,7 @@ impl Grippers
 			power_level: 1.,
 			grippers: grippers,
 			last_kill_time: -10.,
+			kind: GripperKind::Normal,
 		}
 	}
 }
@@ -601,6 +688,12 @@ pub enum Effect
 		message: String,
 	},
 	AllowCinematicSkip,
+	AreaDamage
+	{
+		amount: f32,
+		radius: f32,
+		owner: hecs::Entity,
+	},
 }
 
 #[derive(Debug, Clone)]
@@ -822,6 +915,9 @@ impl Stats
 pub struct Inventory
 {
 	pub num_gifts: NumberTracker,
+	pub num_explode: i32,
+	pub num_plasma: i32,
+	pub num_black_hole: i32,
 }
 
 impl Inventory
@@ -830,6 +926,9 @@ impl Inventory
 	{
 		Self {
 			num_gifts: NumberTracker::new(0),
+			num_explode: 1,
+			num_plasma: 1,
+			num_black_hole: 1,
 		}
 	}
 }
