@@ -328,7 +328,9 @@ impl GameState
 			(-16.) as i32,
 		)?);
 
-		self.hs.resize_display().map_err(Into::into)
+		self.hs
+			.resize_display(&self.options.gfx)
+			.map_err(Into::into)
 	}
 
 	pub fn cache_bitmap<'l>(&'l mut self, name: &str) -> Result<&'l Bitmap>

@@ -55,6 +55,7 @@ pub enum Action
 	ToggleFracScale,
 	ChangeInput(game_state::Action, usize),
 	MouseSensitivity(f32),
+	FieldOfView(f32),
 	UiScale(f32),
 	MusicVolume(f32),
 	SfxVolume(f32),
@@ -420,6 +421,19 @@ impl OptionsMenu
 					THEME.clone(),
 				)),
 			],
+			vec![
+				ui::Widget::Label(ui::Label::new(w, h, "Field of View", THEME.clone())),
+				ui::Widget::Slider(ui::Slider::new(
+					w,
+					h,
+					state.options.fov,
+					30.,
+					120.,
+					5.,
+					|i| Action::FieldOfView(i),
+					THEME.clone(),
+				)),
+			],
 			//vec![
 			//	ui::Widget::Label(ui::Label::new(w, h, "UI Scale", THEME.clone())),
 			//	ui::Widget::Slider(ui::Slider::new(
@@ -492,6 +506,10 @@ impl OptionsMenu
 				{
 					state.options.sfx_volume = v;
 					state.sfx.set_sfx_volume(v);
+				}
+				Action::FieldOfView(v) =>
+				{
+					state.options.fov = v;
 				}
 				Action::UiScale(v) =>
 				{

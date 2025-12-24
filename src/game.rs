@@ -1911,7 +1911,7 @@ impl Map
 				let project = self.make_project_raw(
 					self.level_map.depth_output.get_width() as f32,
 					self.level_map.depth_output.get_height() as f32,
-					state.options.fov * PI,
+					state.options.fov / 180. * PI,
 				);
 				let camera = self.make_camera(0.);
 
@@ -3977,7 +3977,7 @@ impl Map
 	{
 		let dw = state.hs.buffer_width();
 		let dh = state.hs.buffer_height();
-		self.make_project_raw(dw, dh, state.options.fov * PI)
+		self.make_project_raw(dw, dh, state.options.fov / 180. * PI)
 	}
 
 	fn camera_pos(&self, alpha: f32) -> Point3<f32>

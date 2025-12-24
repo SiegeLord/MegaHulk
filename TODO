@@ -4,17 +4,11 @@ Modeling
     - Grate doodad
     - Exit door
     - Secret door
+
     - Title
-    - Ammo
     - Spawn animation
 
-Rescale lengths to 3x or so for the intermission
-
-Turn max punch speed into kinetic energy
-
 Final screen
-
-Frac scale isn't updating
 
 Map
     Still some leakage through closed doors...
