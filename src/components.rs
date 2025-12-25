@@ -1039,3 +1039,6 @@ pub struct BlackHole
 {
 	pub spawn_time: f64,
 }
+
+#[derive(Debug, Clone)]
+pub struct GripPoint;

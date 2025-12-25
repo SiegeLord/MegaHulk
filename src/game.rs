@@ -821,7 +821,7 @@ pub fn spawn_player(
 	let mut map_scene = comps::MapScene::new(scene_name);
 	map_scene.explored = true;
 
-	let mut health = comps::Health::new(100.);
+	let mut health = comps::Health::new(10000.);
 	health.remove_on_death = false;
 	health.death_effects = vec![
 		comps::Effect::SpawnDeathCamera,
@@ -1169,17 +1169,80 @@ pub fn spawn_light(
 	Ok(entity)
 }
 
-fn spawn_door(
-	pos: Point3<f32>, rot: UnitQuaternion<f32>, open_on_exit: bool, key: Option<comps::KeyKind>,
-	physics: &mut Physics, world: &mut hecs::World, state: &mut game_state::GameState,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DoodadDesc
+{
+	scene: String,
+	map_scene: Option<String>,
+}
+
+fn spawn_doodad(
+	desc: DoodadDesc, pos: Point3<f32>, rot: UnitQuaternion<f32>, physics: &mut Physics,
+	world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
-	let scene_name = "data/door1.glb";
-	let map_scene_name = "data/door_map.glb";
-	game_state::cache_scene(state, map_scene_name)?;
+	if let Some(map_scene_name) = &desc.map_scene
+	{
+		game_state::cache_scene(state, map_scene_name)?;
+	}
+	let scene_name = &desc.scene;
+	let scene = game_state::cache_scene(state, &desc.scene)?;
+
+	let entity = world.spawn((
+		comps::Position::new(pos, rot),
+		comps::Scene::new(scene_name),
+		comps::GripPoint,
+	));
+	if let Some(map_scene_name) = &desc.map_scene
+	{
+		world.insert_one(entity, comps::MapScene::new(map_scene_name))?;
+	}
+
+	let rigid_body = RigidBodyBuilder::fixed()
+		.translation(pos.coords)
+		.rotation(rot.scaled_axis())
+		.user_data(entity.to_bits().get() as u128)
+		.build();
+	let body_handle = physics.rigid_body_set.insert(rigid_body);
+
+	for (vertices, _) in get_collision_trimeshes(scene)
+	{
+		let collider = ColliderBuilder::convex_hull(&vertices)
+			.ok_or_else(|| format!("Couldn't create convex hull for {}", scene_name))?
+			.collision_groups(InteractionGroups::new(
+				BIG_GROUP,
+				PLAYER_GROUP | BIG_GROUP | SMALL_GROUP | GRIPPER_GROUP,
+				InteractionTestMode::And,
+			))
+			.user_data(entity.to_bits().get() as u128)
+			.build();
+		physics
+			.collider_set
+			.insert_with_parent(collider, body_handle, &mut physics.rigid_body_set);
+	}
+	world.insert_one(entity, comps::Physics::new(body_handle))?;
+	Ok(entity)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DoorDesc
+{
+	scene: String,
+	map_scene: String,
+}
+
+fn spawn_door(
+	desc: DoorDesc, pos: Point3<f32>, rot: UnitQuaternion<f32>, open_on_exit: bool,
+	key: Option<comps::KeyKind>, physics: &mut Physics, world: &mut hecs::World,
+	state: &mut game_state::GameState,
+) -> Result<hecs::Entity>
+{
+	let scene_name = &desc.scene;
+	let map_scene_name = &desc.map_scene;
+	game_state::cache_scene(state, &map_scene_name)?;
 	let scene = game_state::cache_scene(state, scene_name)?;
 
-	let mut map_scene = comps::MapScene::new(map_scene_name);
+	let mut map_scene = comps::MapScene::new(&map_scene_name);
 	map_scene.color = key
 		.map(|k| k.color())
 		.unwrap_or(Color::from_rgb_f(1., 1., 1.));
@@ -1382,6 +1445,7 @@ fn spawn_level(
 	let level_scene = state.get_scene(scene_name)?;
 	let entity = world.spawn((
 		comps::Position::new(Point3::origin(), UnitQuaternion::identity()),
+		comps::GripPoint,
 		comps::Scene::new(scene_name),
 	));
 
@@ -1437,6 +1501,23 @@ fn spawn_level(
 				{
 					player_start = Some(comps::Position::new(pos, rot));
 				}
+				else if object.name.starts_with("Doodad")
+				{
+					let desc_str = object
+						.properties
+						.as_object()
+						.and_then(|o| o.get("doodad_desc"))
+						.and_then(|s| s.as_str())
+						.unwrap_or("data/grate_doodad.cfg");
+
+					let doodad_desc: DoodadDesc = utils::load_config(desc_str)?;
+
+					spawn_fns.push(Box::new(
+						move |physics, world, state| -> Result<hecs::Entity> {
+							spawn_doodad(doodad_desc, pos, rot, physics, world, state)
+						},
+					));
+				}
 				else if object.name.starts_with("Door")
 				{
 					let open_on_exit = object
@@ -1466,9 +1547,27 @@ fn spawn_level(
 						None
 					};
 
+					let desc_str = object
+						.properties
+						.as_object()
+						.and_then(|o| o.get("door_desc"))
+						.and_then(|s| s.as_str())
+						.unwrap_or("data/door1.cfg");
+
+					let door_desc: DoorDesc = utils::load_config(desc_str)?;
+
 					spawn_fns.push(Box::new(
 						move |physics, world, state| -> Result<hecs::Entity> {
-							spawn_door(pos, rot, open_on_exit, key, physics, world, state)
+							spawn_door(
+								door_desc,
+								pos,
+								rot,
+								open_on_exit,
+								key,
+								physics,
+								world,
+								state,
+							)
 						},
 					));
 				}
@@ -1731,7 +1830,6 @@ struct Map
 	camera: hecs::Entity,
 	player_start: comps::Position,
 	player: hecs::Entity,
-	level: hecs::Entity,
 	delayed_effects: Vec<(comps::Effect, hecs::Entity, Option<hecs::Entity>)>,
 	show_map: bool,
 	map_rot: UnitQuaternion<f32>,
@@ -1773,7 +1871,7 @@ impl Map
 
 		let mut physics = Physics::new();
 		let LevelProperties {
-			level,
+			level: _,
 			level_map,
 			player_start,
 			num_gifts,
@@ -1796,7 +1894,6 @@ impl Map
 			player_start: player_start,
 			player: player,
 			camera: player,
-			level: level,
 			delayed_effects: vec![],
 			show_map: false,
 			map_rot: map_rot,
@@ -2548,7 +2645,6 @@ impl Map
 		// Physics.
 		let handler = PhysicsEventHandler::new();
 		self.physics.step(&handler);
-
 		for (event, contact_pair) in handler.collision_events.try_read().unwrap().iter()
 		{
 			if let CollisionEvent::Started(collider_handle_1, collider_handle_2, _) = event
@@ -2568,6 +2664,7 @@ impl Map
 					let id = hecs::Entity::from_bits(collider.user_data as u64).unwrap();
 					let other_id =
 						hecs::Entity::from_bits(other_collider.user_data as u64).unwrap();
+					let other_body_pos = *self.world.get::<&comps::Position>(other_id).unwrap();
 
 					if let Ok(on_collide_effects) = self.world.get::<&comps::OnCollideEffects>(id)
 					{
@@ -2609,7 +2706,7 @@ impl Map
 							{
 								comps::GripperKind::Normal =>
 								{
-									if other_id == self.level
+									if self.world.get::<&comps::GripPoint>(other_id).is_ok()
 									{
 										if let Some(joint_handle) = gripper.attach_joint.take()
 										{
@@ -2624,9 +2721,7 @@ impl Map
 												.remove(joint_handle, true);
 										};
 
-										let mut joint = FixedJointBuilder::new()
-											.local_anchor1(Point3::new(0., 0., 0.))
-											.local_anchor2(Point3::origin() + body.translation());
+										let mut normal = None;
 										for contact_manifold in contact_pair
 											.as_ref()
 											.iter()
@@ -2637,24 +2732,39 @@ impl Map
 											{
 												continue;
 											}
-											let up = if contact_manifold
-												.local_n1
-												.dot(&Vector3::y())
-												.abs() == 1.
-											{
-												Vector3::x_axis()
-											}
-											else
-											{
-												Vector3::y_axis()
-											};
-											joint = joint.local_frame1(Isometry3::look_at_lh(
-												&Point3::origin(),
-												&contact_manifold.local_n1.into(),
-												&up,
-											));
+											normal = Some(contact_manifold.local_n1);
 											break;
 										}
+
+										if normal.is_none()
+										{
+											continue;
+										}
+										let normal = normal.unwrap();
+
+										let mut joint = FixedJointBuilder::new()
+											.local_anchor1(Point3::origin())
+											.local_anchor2(
+												Point3::origin()
+													+ other_body_pos.rot.inverse()
+														* (body.translation()
+															- other_body_pos.pos.coords),
+											);
+
+										let up = if normal.dot(&Vector3::y()).abs() == 1.
+										{
+											Vector3::x_axis()
+										}
+										else
+										{
+											Vector3::y_axis()
+										};
+
+										joint = joint.local_frame1(Isometry3::look_at_lh(
+											&Point3::origin(),
+											&normal.into(),
+											&up,
+										));
 
 										let joint_handle = self.physics.impulse_joint_set.insert(
 											body_handle,
@@ -3162,16 +3272,10 @@ impl Map
 			self.world.get::<&mut comps::Position>(id).unwrap().rot = new_rot;
 		}
 
-		// Door upkeep.
-		for (id, (position, door, map_scene, scene, physics)) in self
+		// Map scene exploration
+		for (id, (position, map_scene)) in self
 			.world
-			.query::<(
-				&comps::Position,
-				&mut comps::Door,
-				&mut comps::MapScene,
-				&mut comps::Scene,
-				&comps::Physics,
-			)>()
+			.query::<(&comps::Position, &mut comps::MapScene)>()
 			.iter()
 		{
 			if let Some(player_position) = player_position
@@ -3199,7 +3303,19 @@ impl Map
 					}
 				}
 			}
+		}
 
+		// Door upkeep.
+		for (id, (door, map_scene, scene, physics)) in self
+			.world
+			.query::<(
+				&mut comps::Door,
+				&mut comps::MapScene,
+				&mut comps::Scene,
+				&comps::Physics,
+			)>()
+			.iter()
+		{
 			map_scene.occluding = door.status == comps::DoorStatus::Closed;
 
 			if door.status == comps::DoorStatus::Open
