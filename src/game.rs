@@ -1229,6 +1229,8 @@ struct DoorDesc
 {
 	scene: String,
 	map_scene: String,
+	#[serde(default)]
+	is_exit: bool,
 }
 
 fn spawn_door(
@@ -1243,9 +1245,16 @@ fn spawn_door(
 	let scene = game_state::cache_scene(state, scene_name)?;
 
 	let mut map_scene = comps::MapScene::new(&map_scene_name);
-	map_scene.color = key
-		.map(|k| k.color())
-		.unwrap_or(Color::from_rgb_f(1., 1., 1.));
+	map_scene.color = key.map(|k| k.color()).unwrap_or(
+		if desc.is_exit
+		{
+			Color::from_rgb_f(1., 0., 1.)
+		}
+		else
+		{
+			Color::from_rgb_f(1., 1., 1.)
+		},
+	);
 
 	//scene.animation_states = animation_states;
 	let entity = world.spawn((
