@@ -18,6 +18,10 @@ impl Menu
 {
 	pub fn new(ignore_first_mouse_up: bool, state: &mut game_state::GameState) -> Result<Self>
 	{
+		state
+			.sfx
+			.play_music("data/MegaHulk3.ogg", 0.5, &state.hs.core);
+
 		state.hs.paused = false;
 		state.hs.hide_mouse = false;
 		state.sfx.cache_sample("data/ui1.ogg")?;
@@ -92,7 +96,7 @@ impl Menu
 			)
 			.ok();
 
-		state.hs.core.clear_to_color(Color::from_rgb_f(0., 0., 0.5));
+		state.hs.core.clear_to_color(Color::from_rgb_f(0., 0., 0.));
 		self.subscreens.draw(state);
 
 		Ok(())

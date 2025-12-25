@@ -248,8 +248,8 @@ pub enum GripperKind
 {
 	Normal,
 	Explode,
-	BlackHole,
 	Plasma,
+	BlackHole,
 }
 
 impl GripperKind
@@ -656,6 +656,7 @@ impl std::fmt::Display for ItemKind
 #[derive(Debug, Clone)]
 pub enum Effect
 {
+	RemoveAI,
 	Die,
 	Damage
 	{
@@ -898,7 +899,7 @@ impl StatValues
 	{
 		Self {
 			speed: 16.,
-			rot_speed: 4.,
+			rot_speed: 10.,
 		}
 	}
 
@@ -951,9 +952,9 @@ impl Inventory
 	{
 		Self {
 			num_gifts: NumberTracker::new(0),
-			num_explode: 1,
-			num_plasma: 1,
-			num_black_hole: 1,
+			num_explode: 0,
+			num_plasma: 0,
+			num_black_hole: 0,
 		}
 	}
 }
@@ -1026,6 +1027,8 @@ pub struct RobotDesc
 	pub weapon: WeaponDesc,
 	pub ai: AIDesc,
 	pub stats: StatValues,
+	#[serde(default)]
+	pub is_boss: bool,
 }
 
 #[derive(Debug, Clone)]

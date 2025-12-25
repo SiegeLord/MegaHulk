@@ -23,7 +23,7 @@ const THEME: ui::Theme = ui::Theme {
 	selected: Color::from_rgb_f(1., 1., 1.),
 
 	horiz_space: 16.,
-	vert_space: 16.,
+	vert_space: 6.,
 };
 
 const THEME_LIGHT: ui::Theme = ui::Theme {
@@ -32,7 +32,7 @@ const THEME_LIGHT: ui::Theme = ui::Theme {
 	selected: Color::from_rgb_f(1., 1., 1.),
 
 	horiz_space: 16.,
-	vert_space: 16.,
+	vert_space: 6.,
 };
 
 pub const BUTTON_WIDTH: f32 = 128.;
@@ -81,25 +81,19 @@ impl MainMenu
 
 		let mut widgets = vec![];
 
-		let mut path_buf = utils::user_data_path(&state.hs.core)?;
-		path_buf.push("save.cfg");
-		if path_buf.exists()
-		{
-			widgets.push(vec![ui::Widget::Button(ui::Button::new(
+		widgets.extend([
+			vec![ui::Widget::Label(ui::Label::new(
 				w,
 				h,
-				"Resume Game",
-				Action::Resume,
+				"MEGAHULK",
 				THEME.clone(),
-			))]);
-		}
-
-		widgets.extend([
+			))],
+			vec![ui::Widget::Label(ui::Label::new(w, h, "", THEME.clone()))],
 			vec![ui::Widget::Button(ui::Button::new(
 				w,
 				h,
 				"New Game",
-				Action::Start,
+				Action::Forward(|s| Ok(SubScreen::Story(Story::new(s)))),
 				THEME.clone(),
 			))],
 			vec![ui::Widget::Button(ui::Button::new(
@@ -156,7 +150,7 @@ impl MainMenu
 			HORIZ_SPACE,
 			state.hs.buffer_height() - lh - VERT_SPACE,
 			FontAlign::Left,
-			&format!("Version: {}", game_state::VERSION),
+			&format!("Shareware Version: {}", game_state::VERSION),
 		);
 	}
 
@@ -189,20 +183,24 @@ impl ControlsMenu
 		let h = BUTTON_HEIGHT;
 
 		let mut widgets = vec![];
-		// widgets.push(vec![
-		// 	ui::Widget::Label(ui::Label::new(0., 0., w * 1.5, h, "MOUSE SENSITIVITY")),
-		// 	ui::Widget::Slider(ui::Slider::new(
-		// 		0.,
-		// 		0.,
-		// 		w,
-		// 		h,
-		// 		state.controls.get_mouse_sensitivity(),
-		// 		0.,
-		// 		2.,
-		// 		false,
-		// 		|i| Action::MouseSensitivity(i),
-		// 	)),
-		// ]);
+		widgets.push(vec![
+			ui::Widget::Label(ui::Label::new(
+				w * 1.5,
+				h,
+				"Mouse Sensitivity",
+				THEME.clone(),
+			)),
+			ui::Widget::Slider(ui::Slider::new(
+				w,
+				h,
+				state.controls.get_mouse_sensitivity(),
+				0.,
+				2.,
+				0.01,
+				|i| Action::MouseSensitivity(i),
+				THEME.clone(),
+			)),
+		]);
 
 		for (&action, &inputs) in state.controls.get_actions_to_inputs()
 		{
@@ -610,6 +608,7 @@ pub enum SubScreen
 	ControlsMenu(ControlsMenu),
 	OptionsMenu(OptionsMenu),
 	InGameMenu(InGameMenu),
+	Story(Story),
 }
 
 impl SubScreen
@@ -622,6 +621,7 @@ impl SubScreen
 			SubScreen::ControlsMenu(s) => s.draw(state),
 			SubScreen::OptionsMenu(s) => s.draw(state),
 			SubScreen::InGameMenu(s) => s.draw(state),
+			SubScreen::Story(s) => s.draw(state),
 		}
 	}
 
@@ -633,6 +633,7 @@ impl SubScreen
 			SubScreen::ControlsMenu(s) => s.input(state, event),
 			SubScreen::OptionsMenu(s) => s.input(state, event),
 			SubScreen::InGameMenu(s) => s.input(state, event),
+			SubScreen::Story(s) => s.input(state, event),
 		}
 	}
 
@@ -644,6 +645,7 @@ impl SubScreen
 			SubScreen::ControlsMenu(s) => s.resize(state),
 			SubScreen::OptionsMenu(s) => s.resize(state),
 			SubScreen::InGameMenu(s) => s.resize(state),
+			SubScreen::Story(s) => s.resize(state),
 		}
 	}
 }
@@ -675,19 +677,6 @@ impl SubScreens
 
 	pub fn draw(&self, state: &game_state::GameState)
 	{
-		let time = state.hs.core.get_time();
-		let f = if self.time_to_transition > time
-		{
-			-1. + (self.time_to_transition - time) / TRANSITION_TIME
-		}
-		else
-		{
-			(1. - (time - self.time_to_transition) / TRANSITION_TIME).max(0.)
-		};
-		let f = f as f32;
-		let mut transform = Transform::identity();
-		transform.translate(0., state.hs.buffer_height() * f);
-		state.hs.core.use_transform(&transform);
 		if let Some(subscreen) = self.subscreens.last()
 		{
 			subscreen.draw(state);
@@ -702,23 +691,8 @@ impl SubScreens
 		if self.action.is_none()
 		{
 			self.action = self.subscreens.last_mut().unwrap().input(state, event);
-			let is_change_input = if let Some(Action::ChangeInput(_, _)) = self.action
-			{
-				true
-			}
-			else
-			{
-				false
-			};
-			if self.action.is_some() && self.action != Some(Action::SelectMe) && !is_change_input
-			{
-				self.time_to_transition = state.hs.core.get_time() + TRANSITION_TIME;
-			}
 		}
-		if let (Some(action), true) = (
-			self.action.clone(),
-			state.hs.core.get_time() > self.time_to_transition,
-		)
+		if let Some(action) = self.action.clone()
 		{
 			self.action = None;
 			match action
@@ -972,6 +946,88 @@ impl IntermissionMenu
 		};
 		res.resize(state);
 		Ok(res)
+	}
+
+	pub fn draw(&self, state: &game_state::GameState)
+	{
+		self.widgets.draw(&state.hs);
+	}
+
+	pub fn input(&mut self, state: &mut game_state::GameState, event: &Event) -> Option<Action>
+	{
+		self.widgets.input(event, &mut state.sfx, &mut state.hs)
+	}
+
+	pub fn resize(&mut self, state: &game_state::GameState)
+	{
+		let cx = state.hs.buffer_width() / 2.;
+		let cy = state.hs.buffer_height() / 2. + 16.;
+
+		self.widgets.set_pos(Point2::new(cx, cy));
+		self.widgets.resize(&state.hs);
+	}
+}
+
+pub struct Story
+{
+	widgets: ui::WidgetList<Action>,
+}
+
+impl Story
+{
+	pub fn new(state: &game_state::GameState) -> Self
+	{
+		let w = BUTTON_WIDTH;
+		let h = BUTTON_HEIGHT;
+
+		let story = [
+			"We have lost contact with the outer planet gift mines. ",
+			"The final transmission consisted of incoherent screams, ",
+			"followed by silence and servo noises. ",
+			"",
+			"Christmas requires gifts, so we are sending you, MEGAHULK ",
+			"to retrive them.",
+			"",
+			"Let the booms of your punches replace the silence of the ELVES.",
+			"",
+		];
+
+		let mut widgets = vec![];
+
+		for line in story
+		{
+			widgets.push(vec![ui::Widget::Label(ui::Label::new_align(
+				state.hs.buffer_width() - 2. * HORIZ_SPACE,
+				h,
+				line,
+				FontAlign::Left,
+				THEME.clone(),
+			))]);
+		}
+		widgets.push(vec![
+			ui::Widget::Button(ui::Button::new(
+				w,
+				h,
+				"MEGAHULK",
+				Action::Start,
+				THEME.clone(),
+			)),
+			ui::Widget::Button(ui::Button::new(
+				w,
+				h,
+				"Too tired",
+				Action::Back,
+				THEME.clone(),
+			)),
+		]);
+		let mut res = Self {
+			widgets: ui::WidgetList::new(
+				&widgets.iter().map(|r| &r[..]).collect::<Vec<_>>(),
+				THEME.clone(),
+			),
+		};
+		res.resize(state);
+		res
 	}
 
 	pub fn draw(&self, state: &game_state::GameState)

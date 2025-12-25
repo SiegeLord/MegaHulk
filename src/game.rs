@@ -38,7 +38,7 @@ const BIG_GROUP: Group = Group::GROUP_3;
 const SMALL_GROUP: Group = Group::GROUP_4;
 
 const POWER_LEVEL_TIME: f64 = 10.0;
-const SELF_DESTRUCT_TIME: f64 = 10.0;
+const SELF_DESTRUCT_TIME: f64 = 20.0;
 const ENERGY_AMOUNT: f32 = 20.;
 
 pub fn color_to_array(color: Color) -> [f32; 4]
@@ -217,6 +217,12 @@ impl Game
 {
 	pub fn new(state: &mut game_state::GameState) -> Result<Self>
 	{
+		state.sfx.cache_sample("data/punch.ogg")?;
+		state.sfx.cache_sample("data/notice.ogg")?;
+		state.sfx.cache_sample("data/bullet_hit.ogg")?;
+		state.sfx.cache_sample("data/bullet_fire.ogg")?;
+		state.sfx.cache_sample("data/explosion.ogg")?;
+
 		state.controls.clear_action_states();
 		Ok(Self {
 			map: Map::new(state)?,
@@ -369,14 +375,27 @@ pub fn spawn_robot(
 		}
 	}
 
-	let entity = world.spawn((
-		comps::Position::new(pos, rot),
-		comps::Scene::new(scene_name),
-		comps::Controller::new(),
-		comps::Health::new(robot_desc.health as f32),
-		comps::Weapon::new(robot_desc.weapon.clone(), &slots),
-		comps::Stats::new(robot_desc.stats.clone()),
-		comps::OnDeathEffects::new(&[
+	let mut health = comps::Health::new(robot_desc.health as f32);
+
+	let on_death_effects = if robot_desc.is_boss
+	{
+		health.remove_on_death = false;
+		health.death_effects = vec![
+			comps::Effect::ExplosionSpawner {
+				kind: comps::ExplosionKind::Small,
+			},
+			comps::Effect::StartSelfDestruct,
+			comps::Effect::AddToScore {
+				amount: robot_desc.score,
+			},
+			comps::Effect::OpenExit,
+			comps::Effect::RemoveAI,
+		];
+		vec![]
+	}
+	else
+	{
+		vec![
 			comps::Effect::SpawnExplosion {
 				kind: comps::ExplosionKind::Big,
 			},
@@ -387,7 +406,17 @@ pub fn spawn_robot(
 				amount: robot_desc.score,
 			},
 			comps::Effect::RobotDestroyed,
-		]),
+		]
+	};
+
+	let entity = world.spawn((
+		comps::Position::new(pos, rot),
+		comps::Scene::new(scene_name),
+		comps::Controller::new(),
+		health,
+		comps::Weapon::new(robot_desc.weapon.clone(), &slots),
+		comps::Stats::new(robot_desc.stats.clone()),
+		comps::OnDeathEffects::new(&on_death_effects),
 		comps::Bob::new(0.001),
 		comps::AI::new(robot_desc.clone()),
 	));
@@ -821,7 +850,7 @@ pub fn spawn_player(
 	let mut map_scene = comps::MapScene::new(scene_name);
 	map_scene.explored = true;
 
-	let mut health = comps::Health::new(10000.);
+	let mut health = comps::Health::new(100.);
 	health.remove_on_death = false;
 	health.death_effects = vec![
 		comps::Effect::SpawnDeathCamera,
@@ -1735,7 +1764,7 @@ pub struct LevelDesc
 {
 	pub scene: String,
 	pub name: String,
-	pub next: String,
+	pub next: Option<String>,
 	pub music: String,
 }
 
@@ -1893,8 +1922,7 @@ impl Map
 			state,
 		)?;
 
-		let map_rot =
-			UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -PI / 2.) * player_start.rot;
+		let map_rot = player_start.rot;
 
 		Ok(Self {
 			world: world,
@@ -1966,6 +1994,12 @@ impl Map
 			- state
 				.controls
 				.get_action_state(game_state::Action::RotateDown);
+		let roll_left_right = state
+			.controls
+			.get_action_state(game_state::Action::RollLeft)
+			- state
+				.controls
+				.get_action_state(game_state::Action::RollRight);
 		let want_enrage = state.controls.get_action_state(game_state::Action::Enrage) > 0.5;
 		state
 			.controls
@@ -2027,7 +2061,8 @@ impl Map
 			else if self.map_state == MapState::Interactive
 			{
 				controller.want_move = Vector3::new(right_left, up_down, 0.);
-				controller.want_rotate = Vector3::new(-rot_up_down, -rot_right_left, 0.);
+				controller.want_rotate =
+					Vector3::new(-rot_up_down, -rot_right_left, roll_left_right);
 				controller.want_enrage = want_enrage;
 
 				controller.want_normal = want_normal;
@@ -2213,7 +2248,7 @@ impl Map
 							self.stats.score = self.score.value + bonus;
 							self.stats.bonus = bonus;
 							self.stats.time = state.hs.time - self.start_time;
-							state.next_level_desc = Some(self.level_desc.next.clone());
+							state.next_level_desc = self.level_desc.next.clone();
 							return Ok(Some(game_state::NextScreen::Intermission {
 								map_stats: self.stats.clone(),
 							}));
@@ -2252,6 +2287,8 @@ impl Map
 			self.camera_target.rot = position.rot;
 			self.camera_target.scale = position.scale;
 		}
+		let camera_pos = self.camera_target.pos;
+		let camera_rot = self.camera_target.rot;
 		if state.controls.get_action_state(game_state::Action::Map) > 0.5
 			&& self.map_state == MapState::Interactive
 		{
@@ -2345,6 +2382,13 @@ impl Map
 								if hecs::Entity::from_bits(collider.user_data as u64).unwrap()
 									== self.player
 								{
+									state.sfx.play_positional_sound_3d(
+										"data/notice.ogg",
+										position.pos.into(),
+										camera_pos,
+										camera_rot,
+										1.,
+									)?;
 									new_state = Some(comps::AIState::Attacking(self.player));
 									wake_up_near.push((position.pos, self.player));
 								}
@@ -2396,7 +2440,12 @@ impl Map
 
 						let visible = self
 							.physics
-							.ray_cast(Some(physics.handle), position.pos, dir, 5.)
+							.ray_cast(
+								Some(physics.handle),
+								position.pos,
+								dir,
+								ai.robot_desc.ai.max_range,
+							)
 							.map(|(collider_handle, _)| {
 								hecs::Entity::from_bits(
 									self.physics.collider_set[collider_handle].user_data as u64,
@@ -2571,6 +2620,13 @@ impl Map
 							)
 						}));
 						spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
+							state.sfx.play_positional_sound_3d(
+								"data/bullet_fire.ogg",
+								bullet_pos.into(),
+								camera_pos,
+								camera_rot,
+								1.,
+							)?;
 							spawn_bullet(
 								&scene,
 								color,
@@ -2715,6 +2771,13 @@ impl Map
 							{
 								comps::GripperKind::Normal =>
 								{
+									state.sfx.play_positional_sound_3d(
+										"data/punch.ogg",
+										gripper_pos.into(),
+										camera_pos,
+										camera_rot,
+										1.,
+									)?;
 									if self.world.get::<&comps::GripPoint>(other_id).is_ok()
 									{
 										if let Some(joint_handle) = gripper.attach_joint.take()
@@ -3474,6 +3537,13 @@ impl Map
 					);
 				let kind = explosion_spawner.kind;
 				spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
+					state.sfx.play_positional_sound_3d(
+						"data/explosion.ogg",
+						pos,
+						camera_pos,
+						camera_rot,
+						1.,
+					)?;
 					spawn_explosion(pos, kind, &mut map.world, state)
 				}));
 				explosion_spawner.time_for_explosion = state.hs.time + 0.1;
@@ -3589,6 +3659,11 @@ impl Map
 			{
 				match effect
 				{
+					comps::Effect::RemoveAI =>
+					{
+						self.world.remove_one::<comps::AI>(id)?;
+						self.world.remove_one::<comps::Weapon>(id)?;
+					}
 					comps::Effect::Die =>
 					{
 						to_die.push(id);
@@ -3603,6 +3678,16 @@ impl Map
 								health.damage_time = state.hs.time;
 								health.damaged_by = Some(owner);
 							}
+							if let Ok(position) = self.world.get::<&comps::Position>(id)
+							{
+								state.sfx.play_positional_sound_3d(
+									"data/bullet_hit.ogg",
+									position.pos.into(),
+									camera_pos,
+									camera_rot,
+									1.,
+								)?;
+							}
 							if let Some((position, ai)) = self
 								.world
 								.query_one::<(&comps::Position, &mut comps::AI)>(other_id)
@@ -3612,6 +3697,13 @@ impl Map
 								if other_id != owner
 								{
 									ai.state = comps::AIState::Attacking(owner);
+									state.sfx.play_positional_sound_3d(
+										"data/notice.ogg",
+										position.pos.into(),
+										camera_pos,
+										camera_rot,
+										1.,
+									)?;
 									wake_up_near.push((position.pos, self.player));
 								}
 							}
@@ -4677,8 +4769,8 @@ impl Map
 						state.hs.core.draw_text(
 							state.small_hud_font(),
 							Color::from_rgb_f(0.7, 0.7, 0.9),
-							cx - 70.,
-							bh - 64. - lh / 2. + 16.,
+							cx - 65.,
+							bh - 64. - lh / 2. + 24.,
 							FontAlign::Left,
 							&format!("+{percent}"),
 						);

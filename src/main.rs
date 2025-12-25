@@ -105,9 +105,11 @@ impl game_loop::LoopState for LoopState
 		)?);
 		game_state.resize_display().into_slhack()?;
 
-		game_state.next_level_desc = Some("data/test_level.cfg".to_string());
-		//self.cur_screen = Some(Screen::Menu(menu::Menu::new(game_state).into_slhack()?));
-		self.cur_screen = Some(Screen::Game(game::Game::new(game_state).into_slhack()?));
+		game_state.next_level_desc = Some("data/level3.cfg".to_string());
+		self.cur_screen = Some(Screen::Menu(
+			menu::Menu::new(false, game_state).into_slhack()?,
+		));
+		//self.cur_screen = Some(Screen::Game(game::Game::new(game_state).into_slhack()?));
 		Ok(())
 	}
 

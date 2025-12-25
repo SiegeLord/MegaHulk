@@ -50,7 +50,19 @@ impl Intermission
 		{
 			match action
 			{
-				ui::Action::Start => return Ok(Some(game_state::NextScreen::Game)),
+				ui::Action::Start =>
+				{
+					if state.next_level_desc.is_some()
+					{
+						return Ok(Some(game_state::NextScreen::Game));
+					}
+					else
+					{
+						return Ok(Some(game_state::NextScreen::Menu {
+							ignore_first_mouse_up: false,
+						}));
+					}
+				}
 				_ => (),
 			}
 		}

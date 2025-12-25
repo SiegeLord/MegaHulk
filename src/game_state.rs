@@ -71,6 +71,8 @@ pub enum Action
 	RotateRight,
 	RotateUp,
 	RotateDown,
+	RollLeft,
+	RollRight,
 	GripLeft,
 	GripRight,
 	Enrage,
@@ -97,6 +99,8 @@ impl controls::Action for Action
 			Action::RotateRight => "Rotate Right",
 			Action::RotateUp => "Rotate Up",
 			Action::RotateDown => "Rotate Down",
+			Action::RollLeft => "Roll Left",
+			Action::RollRight => "Roll Right",
 			Action::GripLeft => "Grip Left",
 			Action::GripRight => "Grip Right",
 			Action::Enrage => "Enrage",
@@ -137,6 +141,14 @@ pub fn new_game_controls() -> controls::Controls<Action>
 	);
 	action_to_inputs.insert(Action::RotateUp, [Some(controls::Input::MouseYPos), None]);
 	action_to_inputs.insert(Action::RotateDown, [Some(controls::Input::MouseYNeg), None]);
+	action_to_inputs.insert(
+		Action::RollLeft,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::Q)), None],
+	);
+	action_to_inputs.insert(
+		Action::RollRight,
+		[Some(controls::Input::Keyboard(allegro::KeyCode::E)), None],
+	);
 
 	action_to_inputs.insert(
 		Action::GripLeft,
@@ -211,7 +223,7 @@ impl Default for Options
 			play_music: true,
 			sfx_volume: 1.,
 			music_volume: 1.,
-			fov: 0.4,
+			fov: 70.,
 			controls: new_game_controls(),
 		}
 	}
@@ -319,18 +331,23 @@ impl GameState
 	{
 		self.hud_font = Some(utils::load_ttf_font(
 			&self.hs.ttf,
-			"data/Energon.ttf",
+			"data/FINALOLD.TTF",
 			(-24.) as i32,
 		)?);
 		self.small_hud_font = Some(utils::load_ttf_font(
 			&self.hs.ttf,
-			"data/Energon.ttf",
+			"data/FINALOLD.TTF",
 			(-16.) as i32,
 		)?);
 
-		self.hs
-			.resize_display(&self.options.gfx)
-			.map_err(Into::into)
+		self.hs.resize_display(&self.options.gfx)?;
+
+		self.hs.ui_font = Some(utils::load_ttf_font(
+			&self.hs.ttf,
+			"data/FINALOLD.TTF",
+			(-16.) as i32,
+		)?);
+		Ok(())
 	}
 
 	pub fn cache_bitmap<'l>(&'l mut self, name: &str) -> Result<&'l Bitmap>
