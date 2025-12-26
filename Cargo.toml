@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
 authors = ["SiegeLord <slabode@aim.com>"]
+build = "build.rs"
 
 [dependencies]
 
@@ -54,4 +55,7 @@ ordered-float = "5.1.0"
 debug = true
 
 [features]
-use_user_settings = []
+use_user_settings = ["slhack/use_user_settings"]
+
+[build-dependencies]
+winresource = "0.1"

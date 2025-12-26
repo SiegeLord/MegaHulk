@@ -212,7 +212,7 @@ impl Default for Options
 	{
 		Self {
 			gfx: hack_state::GfxOptions {
-				fullscreen: false,
+				fullscreen: true,
 				width: 960,
 				height: 864,
 				vsync_method: if cfg!(target_os = "windows") { 1 } else { 2 },

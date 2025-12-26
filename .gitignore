@@ -6,3 +6,5 @@ target
 /*.jpg
 data/*~
 *.kra
+MegaHulk_Src/**
+/*.zip
