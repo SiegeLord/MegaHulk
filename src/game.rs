@@ -4199,7 +4199,7 @@ impl Map
 						if let Ok(mut inventory) = self.world.get::<&mut comps::Inventory>(id)
 						{
 							let num_gifts = inventory.num_gifts.value;
-							self.stats.gifts_lost += 1;
+							self.stats.gifts_lost += num_gifts;
 							inventory.num_gifts.add(-num_gifts, state.hs.time);
 						}
 					}
