@@ -850,7 +850,7 @@ pub fn spawn_player(
 	let mut map_scene = comps::MapScene::new(scene_name);
 	map_scene.explored = true;
 
-	let mut health = comps::Health::new(100.);
+	let mut health = comps::Health::new(10000.);
 	health.remove_on_death = false;
 	health.death_effects = vec![
 		comps::Effect::SpawnDeathCamera,
@@ -1137,6 +1137,7 @@ pub fn spawn_bullet(
 				color: hit_color,
 			},
 		]),
+		comps::TimeToDie::new(state.hs.time + 5.),
 	));
 	if color != Color::from_rgb_f(0., 0., 0.)
 	{
@@ -1145,6 +1146,16 @@ pub fn spawn_bullet(
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
 		.rotation(rot.scaled_axis())
+		.linear_damping(
+			if target.is_some()
+			{
+				4. / vel.norm()
+			}
+			else
+			{
+				0.
+			},
+		)
 		.angular_damping(1.)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
@@ -1940,7 +1951,12 @@ impl Map
 			damage_rectangle: make_rectangle(state.hs.display.as_mut().unwrap(), &state.hs.prim),
 			stats: MapStats::new(&level_desc),
 			level_desc: level_desc,
-			keys: HashSet::new(),
+			keys: [
+				comps::KeyKind::Red,
+				comps::KeyKind::Yellow,
+				comps::KeyKind::Blue,
+			]
+			.into(), // HashSet::new_,
 			score: comps::NumberTracker::new(0),
 			map_state: MapState::Interactive,
 			messages: MessageTracker::new(),
@@ -2596,11 +2612,33 @@ impl Map
 						homing,
 					} =>
 					{
+						let mut rng = rand::rng();
 						let (forward, _, _) = get_dirs(position.rot);
 						let bullet_pos =
 							position.pos + position.rot * weapon.slots[weapon.cur_slot as usize];
 						weapon.cur_slot = (weapon.cur_slot + 1) % weapon.slots.len() as i32;
-						let bullet_rot = position.rot;
+
+						let mut bullet_dir = if let Some(target_position) = weapon
+							.target
+							.and_then(|target| self.world.get::<&comps::Position>(target).ok())
+						{
+							(target_position.pos - bullet_pos).normalize()
+						}
+						else
+						{
+							forward
+						};
+						let bullet_rot = safe_face_towards(-bullet_dir);
+
+						bullet_dir = (bullet_dir
+							+ 0.05
+								* Vector3::new(
+									rng.random_range(-1.0..=1.0),
+									rng.random_range(-1.0..=1.0),
+									rng.random_range(-1.0..=1.0),
+								)
+								.cast::<f32>())
+						.normalize();
 
 						let target = if *homing { weapon.target } else { None };
 
@@ -2635,7 +2673,7 @@ impl Map
 								hit_color,
 								bullet_pos,
 								bullet_rot,
-								speed * forward,
+								speed * bullet_dir,
 								id,
 								&mut map.physics,
 								&mut map.world,
@@ -3217,9 +3255,20 @@ impl Map
 									};
 
 									let bullet_pos = position.pos;
+									let mut rng = rand::rng();
+									let bullet_dir = (target_dir
+										+ 0.3
+											* Vector3::new(
+												rng.random_range(-1.0..=1.0),
+												rng.random_range(-1.0..=1.0),
+												rng.random_range(-1.0..=1.0),
+											)
+											.cast::<f32>())
+									.normalize();
+									let bullet_rot = safe_face_towards(-bullet_dir);
+
 									spawn_fns.push(Box::new(
 										move |map, state| -> Result<hecs::Entity> {
-											let mut rng = rand::rng();
 											spawn_bullet(
 												"data/plasma_bullet.glb",
 												Color::from_rgb_f(0., 1., 0.),
@@ -3227,17 +3276,8 @@ impl Map
 												target,
 												Color::from_rgb_f(0., 1., 0.),
 												bullet_pos,
-												safe_face_towards(
-													target_dir
-														+ 0.3
-															* Vector3::new(
-																rng.random_range(-1.0..=1.0),
-																rng.random_range(-1.0..=1.0),
-																rng.random_range(-1.0..=1.0),
-															)
-															.cast::<f32>(),
-												),
-												target_dir * 1.,
+												bullet_rot,
+												bullet_dir,
 												id,
 												&mut map.physics,
 												&mut map.world,
