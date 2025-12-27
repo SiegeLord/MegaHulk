@@ -228,7 +228,18 @@ impl Game
 		state.sfx.cache_sample("data/weapon2.ogg")?;
 
 		state.sfx.cache_sample("data/self_destruct.ogg")?;
-		state.sfx.cache_sample("data/countdown.ogg")?;
+		state.sfx.cache_sample("data/countdown_start.ogg")?;
+		state.sfx.cache_sample("data/countdown_0.ogg")?;
+		state.sfx.cache_sample("data/countdown_1.ogg")?;
+		state.sfx.cache_sample("data/countdown_2.ogg")?;
+		state.sfx.cache_sample("data/countdown_3.ogg")?;
+		state.sfx.cache_sample("data/countdown_4.ogg")?;
+		state.sfx.cache_sample("data/countdown_5.ogg")?;
+		state.sfx.cache_sample("data/countdown_6.ogg")?;
+		state.sfx.cache_sample("data/countdown_7.ogg")?;
+		state.sfx.cache_sample("data/countdown_8.ogg")?;
+		state.sfx.cache_sample("data/countdown_9.ogg")?;
+		state.sfx.cache_sample("data/countdown_10.ogg")?;
 
 		state.sfx.cache_sample("data/explosion.ogg")?;
 
@@ -245,6 +256,7 @@ impl Game
 	{
 		if self.subscreens.is_empty()
 		{
+			state.hs.paused = false;
 			state.hs.hide_mouse = true;
 			self.map.logic(state)
 		}
@@ -297,6 +309,7 @@ impl Game
 			if in_game_menu
 			{
 				state.hs.hide_mouse = false;
+				state.hs.paused = true;
 				self.subscreens
 					.push(ui::SubScreen::InGameMenu(ui::InGameMenu::new(state)));
 				self.subscreens.reset_transition(state);
@@ -319,6 +332,7 @@ impl Game
 			}
 			if self.subscreens.is_empty()
 			{
+				state.hs.paused = false;
 				state.controls.clear_action_states();
 			}
 		}
@@ -3731,11 +3745,11 @@ impl Map
 			let time_left = SELF_DESTRUCT_TIME - (state.hs.time - self_destruct_start);
 			if self.map_state == MapState::Interactive
 			{
-				if time_left > 0.5
+				if time_left > -0.2
 				{
 					if time_left.ceil() == 12. && !self.countdown_started
 					{
-						state.sfx.play_sound_fixed("data/countdown.ogg")?;
+						state.sfx.play_sound_fixed("data/countdown_start.ogg")?;
 						self.countdown_started = true;
 					}
 					if state.hs.time > self.next_self_destruct_message
@@ -3746,6 +3760,10 @@ impl Map
 						);
 						if time_left < 10.
 						{
+							state.sfx.play_sound_fixed(&format!(
+								"data/countdown_{}.ogg",
+								time_left.ceil() as i32
+							))?;
 							self.next_self_destruct_message += 1.;
 						}
 						else
@@ -3754,7 +3772,7 @@ impl Map
 						}
 					}
 				}
-				else if time_left <= 0.
+				else
 				{
 					effects.push((
 						comps::Effect::Damage {
