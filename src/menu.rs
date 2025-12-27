@@ -99,6 +99,21 @@ impl Menu
 		state.hs.core.clear_to_color(Color::from_rgb_f(0., 0., 0.));
 		self.subscreens.draw(state);
 
+		if self.subscreens.subscreens.len() == 1
+		{
+			let sprite = state.get_sprite("data/title.cfg")?;
+			sprite.draw_frame(
+				Point2::new(
+					state.hs.buffer_width() / 2.,
+					state.hs.buffer_height() / 2. - 100.,
+				),
+				"Default",
+				0,
+				&state.hs.core,
+				&state.atlas,
+			);
+		}
+
 		Ok(())
 	}
 

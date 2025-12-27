@@ -10,16 +10,12 @@ use serde_derive::{Deserialize, Serialize};
 use slhack::controls::Action as ControlsAction;
 use slhack::{controls, ui};
 
-pub const UNSELECTED: Color = Color::from_rgb_f(0.9, 0.9, 0.4);
-pub const LABEL: Color = Color::from_rgb_f(0.7 * 0.9, 0.7 * 0.9, 0.7 * 0.4);
-pub const SELECTED: Color = Color::from_rgb_f(1., 1., 1.);
-
 pub const HORIZ_SPACE: f32 = 16.;
 pub const VERT_SPACE: f32 = 16.;
 
 const THEME: ui::Theme = ui::Theme {
-	unselected: Color::from_rgb_f(0.9, 0.9, 0.4),
-	label: Color::from_rgb_f(0.7 * 0.9, 0.7 * 0.9, 0.7 * 0.9),
+	unselected: Color::from_rgb_f(0.4, 0.4, 0.9),
+	label: Color::from_rgb_f(0.4 * 0.4, 0.9 * 0.4, 0.4 * 0.4),
 	selected: Color::from_rgb_f(1., 1., 1.),
 
 	horiz_space: 16.,
@@ -27,8 +23,8 @@ const THEME: ui::Theme = ui::Theme {
 };
 
 const THEME_LIGHT: ui::Theme = ui::Theme {
-	unselected: Color::from_rgb_f(0.9, 0.9, 0.4),
-	label: Color::from_rgb_f(0.9, 0.9, 0.9),
+	unselected: Color::from_rgb_f(0.4, 0.9, 0.4),
+	label: Color::from_rgb_f(0.4, 0.9, 0.4),
 	selected: Color::from_rgb_f(1., 1., 1.),
 
 	horiz_space: 16.,
@@ -82,13 +78,6 @@ impl MainMenu
 		let mut widgets = vec![];
 
 		widgets.extend([
-			vec![ui::Widget::Label(ui::Label::new(
-				w,
-				h,
-				"MEGAHULK",
-				THEME.clone(),
-			))],
-			vec![ui::Widget::Label(ui::Label::new(w, h, "", THEME.clone()))],
 			vec![ui::Widget::Button(ui::Button::new(
 				w,
 				h,
@@ -146,11 +135,11 @@ impl MainMenu
 		let lh = state.hs.ui_font().get_line_height() as f32;
 		state.hs.core.draw_text(
 			state.hs.ui_font(),
-			UNSELECTED,
+			THEME.unselected,
 			HORIZ_SPACE,
 			state.hs.buffer_height() - lh - VERT_SPACE,
 			FontAlign::Left,
-			&format!("Shareware Version: {}", game_state::VERSION),
+			&format!("Version: {}", game_state::VERSION),
 		);
 	}
 

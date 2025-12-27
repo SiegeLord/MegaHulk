@@ -834,7 +834,7 @@ pub fn spawn_item(
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
 		.angular_damping(10.)
-		.linear_damping(0.1)
+		.linear_damping(0.5)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
 	let collider = ColliderBuilder::ball(0.25)
