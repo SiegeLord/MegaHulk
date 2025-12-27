@@ -2728,7 +2728,7 @@ impl Map
 						for collider_handle in
 							&self
 								.physics
-								.ball_query(Some(physics.handle), damage_pos, 0.5)
+								.ball_query(Some(physics.handle), damage_pos, 0.3)
 						{
 							let collider = &self.physics.collider_set[*collider_handle];
 							let other_id =
