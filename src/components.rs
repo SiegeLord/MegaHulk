@@ -954,9 +954,9 @@ impl Inventory
 	{
 		Self {
 			num_gifts: NumberTracker::new(0),
-			num_explode: 1,
-			num_plasma: 1,
-			num_black_hole: 1,
+			num_explode: 0,
+			num_plasma: 0,
+			num_black_hole: 0,
 		}
 	}
 }

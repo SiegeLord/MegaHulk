@@ -361,8 +361,10 @@ impl Game
 		Ok(())
 	}
 
-	pub fn resize(&mut self, state: &game_state::GameState)
+	pub fn resize(&mut self, state: &mut game_state::GameState)
 	{
+		self.map.screen_rectangle =
+			make_rectangle(state.hs.display.as_mut().unwrap(), &state.hs.prim);
 		self.subscreens.resize(state);
 	}
 }
@@ -818,7 +820,7 @@ pub fn spawn_item(
 	let rigid_body = RigidBodyBuilder::dynamic()
 		.translation(pos.coords)
 		.angular_damping(10.)
-		.linear_damping(3.)
+		.linear_damping(0.1)
 		.user_data(entity.to_bits().get() as u128)
 		.build();
 	let collider = ColliderBuilder::ball(0.25)
@@ -884,6 +886,7 @@ pub fn spawn_player(
 			comps::Effect::SpawnExplosion {
 				kind: comps::ExplosionKind::Big,
 			},
+			comps::Effect::EjectInventory,
 			comps::Effect::AllowCinematicSkip,
 		]),
 		health,
@@ -1896,7 +1899,7 @@ struct Map
 	map_zoom: f32,
 	level_map: LevelMap,
 	num_gifts: i32,
-	damage_rectangle: VertexBuffer<Vertex>,
+	screen_rectangle: VertexBuffer<Vertex>,
 	level_desc: LevelDesc,
 	keys: HashSet<comps::KeyKind>,
 	score: comps::NumberTracker,
@@ -1908,6 +1911,8 @@ struct Map
 	next_self_destruct_message: f64,
 	allow_cinematic_skip: bool,
 	countdown_started: bool,
+	flash_time: f64,
+	flash_color: Color,
 }
 
 impl Map
@@ -1967,7 +1972,7 @@ impl Map
 			map_zoom: 40.,
 			level_map: level_map,
 			num_gifts: num_gifts,
-			damage_rectangle: make_rectangle(state.hs.display.as_mut().unwrap(), &state.hs.prim),
+			screen_rectangle: make_rectangle(state.hs.display.as_mut().unwrap(), &state.hs.prim),
 			stats: MapStats::new(&level_desc),
 			level_desc: level_desc,
 			keys: [
@@ -1984,6 +1989,8 @@ impl Map
 			next_self_destruct_message: 0.,
 			countdown_started: false,
 			allow_cinematic_skip: false,
+			flash_time: -10.,
+			flash_color: Color::from_rgb_f(0., 0., 0.),
 		})
 	}
 
@@ -3783,6 +3790,11 @@ impl Map
 					{
 						if let Some(other_id) = other_id
 						{
+							if other_id == self.player
+							{
+								self.flash_time = state.hs.time;
+								self.flash_color = Color::from_rgba_f(0.25, 0., 0., 0.25);
+							}
 							if let Ok(mut health) = self.world.get::<&mut comps::Health>(other_id)
 							{
 								health.health -= amount;
@@ -4204,6 +4216,11 @@ impl Map
 						{
 							if other_id == self.player
 							{
+								if other_id == self.player
+								{
+									self.flash_time = state.hs.time;
+									self.flash_color = Color::from_rgba_f(0.0, 0.25, 0., 0.25);
+								}
 								state.sfx.play_sound("data/item.ogg")?;
 								self.messages
 									.add(&format!("Got {}", kind.to_string()), state.hs.time);
@@ -4263,7 +4280,7 @@ impl Map
 									.1;
 								spawn_item(
 									src_pos,
-									0.5 * Vector3::<f64>::from_row_slice(
+									10. * Vector3::<f64>::from_row_slice(
 										&rand_distr::UnitSphere.sample(&mut rng),
 									)
 									.cast::<f32>(),
@@ -4307,7 +4324,54 @@ impl Map
 						}
 					}
 					comps::Effect::EjectInventory =>
-					{}
+					{
+						let pos_inv = self
+							.world
+							.query_one::<(&comps::Position, &comps::Inventory)>(id)
+							.unwrap()
+							.get()
+							.map(|(p, i)| (p.clone(), i.clone()));
+						if let Some((position, inventory)) = pos_inv
+						{
+							let mut rng = rand::rng();
+							for (count, item_kind) in [
+								(
+									inventory.num_plasma,
+									comps::ItemKind::Ammo {
+										kind: comps::GripperKind::Plasma,
+									},
+								),
+								(
+									inventory.num_explode,
+									comps::ItemKind::Ammo {
+										kind: comps::GripperKind::Explode,
+									},
+								),
+								(
+									inventory.num_black_hole,
+									comps::ItemKind::Ammo {
+										kind: comps::GripperKind::BlackHole,
+									},
+								),
+							]
+							{
+								for _ in 0..count
+								{
+									spawn_item(
+										position.pos,
+										0.5 * Vector3::<f64>::from_row_slice(
+											&rand_distr::UnitSphere.sample(&mut rng),
+										)
+										.cast::<f32>(),
+										item_kind,
+										&mut self.physics,
+										&mut self.world,
+										state,
+									)?;
+								}
+							}
+						}
+					}
 					comps::Effect::RobotDestroyed =>
 					{
 						self.stats.robots_destroyed += 1;
@@ -5050,6 +5114,7 @@ impl Map
 				let damage_arrow = state.get_bitmap("data/damage_arrow.png")?;
 				let arrow_w = damage_arrow.get_width() as f32;
 				let arrow_h = damage_arrow.get_height() as f32;
+
 				let f = 1. - ((state.hs.time - health.damage_time) / 0.5).min(1.) as f32;
 
 				let mut dir = None;
@@ -5093,16 +5158,18 @@ impl Map
 					);
 				}
 
+				let f = 1. - ((state.hs.time - self.flash_time) / 0.5).min(1.) as f32;
+				let (r, g, b, a) = self.flash_color.to_rgba_f();
 				state
 					.hs
 					.core
 					.set_shader_uniform(
 						"tint",
 						&[color_to_array(Color::from_rgba_f(
-							0.25 * f,
-							0.,
-							0.,
-							0.25 * f,
+							r * f,
+							g * f,
+							b * f,
+							a * f,
 						))][..],
 					)
 					.ok();
@@ -5112,7 +5179,7 @@ impl Map
 				transform.translate(bw / 2., bh / 2.);
 				state.hs.core.use_transform(&transform);
 				state.hs.prim.draw_vertex_buffer(
-					&self.damage_rectangle,
+					&self.screen_rectangle,
 					Option::<&Bitmap>::None,
 					0,
 					4,
