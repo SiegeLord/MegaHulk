@@ -29,7 +29,7 @@ void main()
 
     vec3 diff = (light_pos - pos) / light_intensity;
     float dist_sq = 10000. * dot(diff, diff);
-    float dist_frac = 1 / (1 + dist_sq * dist_sq);
+    float dist_frac = 1 / (1 + dist_sq);
     //color = vec4(light_color.xyz, 0.);
     
     if (is_static && material == STATIC_MATERIAL)

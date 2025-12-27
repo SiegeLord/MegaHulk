@@ -1492,7 +1492,7 @@ fn spawn_level(
 			{
 				let desc = &mut mesh.material.as_mut().unwrap().desc;
 				desc.material_kind = game_state::MaterialKind::LevelMap;
-				desc.texture = "data/map_texture.png".to_string();
+				desc.texture = "data/map_texture_big.png".to_string();
 				let len = mesh.vertex_buffer.len();
 				for vtx in &mut mesh.vtxs
 				{
@@ -1926,7 +1926,7 @@ impl Map
 
 		game_state::cache_scene(state, "data/sphere.glb")?;
 
-		state.cache_bitmap("data/map_texture.png")?;
+		state.cache_bitmap("data/map_texture_big.png")?;
 		state.cache_bitmap("data/damage_arrow.png")?;
 		state.cache_bitmap("data/hud.png")?;
 		state.cache_bitmap("data/hud_key.png")?;
@@ -4741,7 +4741,7 @@ impl Map
 				.iter()
 			{
 				let shift = Isometry3::new(position.draw_pos(alpha).coords, Vector3::zeros());
-				let transform = Similarity3::from_isometry(shift, 0.5 * light.intensity.sqrt());
+				let transform = Similarity3::from_isometry(shift, 2.5 * light.intensity.sqrt());
 				let light_transform = Similarity3::from_isometry(
 					Isometry3 {
 						translation: light.offset.into(),
