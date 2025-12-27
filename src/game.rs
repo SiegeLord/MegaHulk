@@ -4027,7 +4027,7 @@ impl Map
 								can_open = animation_state.state.is_done();
 							}
 
-							if can_open
+							if can_open && door.status == comps::DoorStatus::Closed
 							{
 								state.sfx.play_positional_sound_3d(
 									"data/open.ogg",
