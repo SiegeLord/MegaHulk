@@ -430,6 +430,7 @@ pub struct AIDesc
 	pub max_range: f32,
 	pub min_range: f32,
 	pub sense_range: f32,
+	pub notice_sound: String,
 	#[serde(default)]
 	pub evade_prob: f32,
 }
@@ -507,6 +508,7 @@ pub enum WeaponKind
 pub struct WeaponDesc
 {
 	pub fire_delay: Vec<f64>,
+	pub fire_sound: String,
 	pub damage: f32,
 	pub kind: WeaponKind,
 	#[serde(default)]
@@ -952,9 +954,9 @@ impl Inventory
 	{
 		Self {
 			num_gifts: NumberTracker::new(0),
-			num_explode: 0,
-			num_plasma: 0,
-			num_black_hole: 0,
+			num_explode: 1,
+			num_plasma: 1,
+			num_black_hole: 1,
 		}
 	}
 }

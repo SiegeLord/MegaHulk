@@ -1,9 +1,45 @@
 UI:
     - Title
-    - Final screen
+
+item screen flash
+equipment eject
+
+Level
+
+fix the grate at the blue key
+block the red door
+make the entrance less claustrophobic
 
 
+hit - done
+spawn - done
+explode - done
 
+robot small (notice1)
+    attack (weapon1)
+robot melee (notice3)
+    attack (weapon3)
+robot plasma (notice2)
+    attack (weapon2)
+robot rocket (notice4)
+    attack - (launch)
+robot boss (notice5)
+    attack (weapon5)
+
+door close/open - done
+item pickup - done
+error - done
+
+gripper launch - done
+
+ui1 - done
+ui2 - done
+
+self destruct
+
+"Self destruct sequence activated"
+
+"Self destruct in 10, 9, 8, ..., 0"
 
 
 

@@ -331,23 +331,18 @@ impl GameState
 	{
 		self.hud_font = Some(utils::load_ttf_font(
 			&self.hs.ttf,
-			"data/FINALOLD.TTF",
-			(-24.) as i32,
+			"data/binxchr.ttf",
+			(-25.) as i32,
 		)?);
 		self.small_hud_font = Some(utils::load_ttf_font(
 			&self.hs.ttf,
-			"data/FINALOLD.TTF",
+			"data/Blocktopia.ttf",
 			(-16.) as i32,
 		)?);
 
-		self.hs.resize_display(&self.options.gfx)?;
-
-		self.hs.ui_font = Some(utils::load_ttf_font(
-			&self.hs.ttf,
-			"data/FINALOLD.TTF",
-			(-16.) as i32,
-		)?);
-		Ok(())
+		Ok(self
+			.hs
+			.resize_display("data/CutePixel.ttf", -16.0, &self.options.gfx)?)
 	}
 
 	pub fn cache_bitmap<'l>(&'l mut self, name: &str) -> Result<&'l Bitmap>

@@ -218,9 +218,18 @@ impl Game
 	pub fn new(state: &mut game_state::GameState) -> Result<Self>
 	{
 		state.sfx.cache_sample("data/punch.ogg")?;
-		state.sfx.cache_sample("data/notice.ogg")?;
 		state.sfx.cache_sample("data/bullet_hit.ogg")?;
-		state.sfx.cache_sample("data/bullet_fire.ogg")?;
+		state.sfx.cache_sample("data/spawn.ogg")?;
+		state.sfx.cache_sample("data/open.ogg")?;
+		state.sfx.cache_sample("data/close.ogg")?;
+		state.sfx.cache_sample("data/item.ogg")?;
+		state.sfx.cache_sample("data/error.ogg")?;
+		state.sfx.cache_sample("data/launch.ogg")?;
+		state.sfx.cache_sample("data/weapon2.ogg")?;
+
+		state.sfx.cache_sample("data/self_destruct.ogg")?;
+		state.sfx.cache_sample("data/countdown.ogg")?;
+
 		state.sfx.cache_sample("data/explosion.ogg")?;
 
 		state.controls.clear_action_states();
@@ -363,6 +372,8 @@ pub fn spawn_robot(
 	physics: &mut Physics, world: &mut hecs::World, state: &mut game_state::GameState,
 ) -> Result<hecs::Entity>
 {
+	state.sfx.cache_sample(&robot_desc.ai.notice_sound)?;
+	state.sfx.cache_sample(&robot_desc.weapon.fire_sound)?;
 	let scene_name = &robot_desc.scene;
 	let scene = game_state::cache_scene(state, scene_name)?;
 
@@ -1896,6 +1907,7 @@ struct Map
 	self_destruct_start: Option<f64>,
 	next_self_destruct_message: f64,
 	allow_cinematic_skip: bool,
+	countdown_started: bool,
 }
 
 impl Map
@@ -1932,6 +1944,13 @@ impl Map
 			&mut world,
 			state,
 		)?;
+		state.sfx.play_positional_sound_3d(
+			"data/spawn.ogg",
+			player_start.pos,
+			player_start.pos,
+			player_start.rot,
+			1.0,
+		)?;
 
 		let map_rot = player_start.rot;
 
@@ -1963,6 +1982,7 @@ impl Map
 			start_time: state.hs.time,
 			self_destruct_start: None,
 			next_self_destruct_message: 0.,
+			countdown_started: false,
 			allow_cinematic_skip: false,
 		})
 	}
@@ -2285,6 +2305,13 @@ impl Map
 								&mut self.world,
 								state,
 							)?;
+							state.sfx.play_positional_sound_3d(
+								"data/spawn.ogg",
+								self.player_start.pos,
+								self.player_start.pos,
+								self.player_start.rot,
+								1.0,
+							)?;
 							self.camera = self.player;
 							self.map_state = MapState::Interactive;
 							self.allow_cinematic_skip = false;
@@ -2399,7 +2426,7 @@ impl Map
 									== self.player
 								{
 									state.sfx.play_positional_sound_3d(
-										"data/notice.ogg",
+										&ai.robot_desc.ai.notice_sound,
 										position.pos.into(),
 										camera_pos,
 										camera_rot,
@@ -2657,14 +2684,14 @@ impl Map
 								state,
 							)
 						}));
+						state.sfx.play_positional_sound_3d(
+							&weapon.desc.fire_sound,
+							bullet_pos.into(),
+							camera_pos,
+							camera_rot,
+							1.,
+						)?;
 						spawn_fns.push(Box::new(move |map, state| -> Result<hecs::Entity> {
-							state.sfx.play_positional_sound_3d(
-								"data/bullet_fire.ogg",
-								bullet_pos.into(),
-								camera_pos,
-								camera_rot,
-								1.,
-							)?;
 							spawn_bullet(
 								&scene,
 								color,
@@ -2684,6 +2711,13 @@ impl Map
 					comps::WeaponKind::Melee =>
 					{
 						let damage_pos = position.pos + position.rot * weapon.slots[0];
+						state.sfx.play_positional_sound_3d(
+							&weapon.desc.fire_sound,
+							damage_pos.into(),
+							camera_pos,
+							camera_rot,
+							1.,
+						)?;
 						for collider_handle in
 							&self
 								.physics
@@ -2886,7 +2920,7 @@ impl Map
 
 										let joint = SpringJointBuilder::new(
 											0.1,
-											30. * grippers.power_level,
+											18. * grippers.power_level,
 											10.,
 										)
 										.local_anchor1(Point3::origin())
@@ -3071,6 +3105,7 @@ impl Map
 			{
 				if new_kind.in_inventory(&inventory)
 				{
+					state.sfx.play_sound("data/error.ogg")?;
 					if new_kind == comps::GripperKind::Normal
 					{
 						self.messages
@@ -3085,6 +3120,7 @@ impl Map
 				}
 				else
 				{
+					state.sfx.play_sound("data/error.ogg")?;
 					self.messages
 						.add(&format!("Not enough {} ammo!", new_kind), state.hs.time);
 				}
@@ -3127,6 +3163,13 @@ impl Map
 								.rigid_body_set
 								.get_mut(gripper_physics.handle)
 								.unwrap();
+							state.sfx.play_positional_sound_3d(
+								"data/launch.ogg",
+								position.pos,
+								camera_pos,
+								camera_rot,
+								1.,
+							)?;
 							gripper_body.apply_impulse(power_level * forward, true);
 							for collider_handle in gripper_body.colliders()
 							{
@@ -3205,7 +3248,18 @@ impl Map
 									None,
 								));
 
-								let radius = 8.;
+								for _ in 0..2
+								{
+									state.sfx.play_positional_sound_3d(
+										"data/weapon2.ogg",
+										position.pos,
+										camera_pos,
+										camera_rot,
+										1.,
+									)?;
+								}
+
+								let radius = 16.;
 								let mut targets = vec![];
 								for collider_handle in
 									self.physics.ball_query(None, position.pos, radius)
@@ -3223,13 +3277,17 @@ impl Map
 										(body.translation() - position.pos.coords).normalize()
 									};
 
-									if let Some((test_collider_handle, _)) =
-										self.physics.ray_cast(None, position.pos, dir, radius)
+									if let Some((test_collider_handle, _)) = self.physics.ray_cast(
+										Some(gripper_physics.handle),
+										position.pos,
+										dir,
+										radius,
+									)
 									{
 										if test_collider_handle == collider_handle
 											&& self.world.get::<&comps::Health>(other_id).is_ok()
 										{
-											targets.push((-dir, other_id));
+											targets.push((dir, other_id));
 										}
 									}
 								}
@@ -3418,9 +3476,10 @@ impl Map
 		}
 
 		// Door upkeep.
-		for (id, (door, map_scene, scene, physics)) in self
+		for (id, (position, door, map_scene, scene, physics)) in self
 			.world
 			.query::<(
+				&comps::Position,
 				&mut comps::Door,
 				&mut comps::MapScene,
 				&mut comps::Scene,
@@ -3434,6 +3493,13 @@ impl Map
 				&& state.hs.time > door.time_to_close
 				&& !door.open_on_exit
 			{
+				state.sfx.play_positional_sound_3d(
+					"data/close.ogg",
+					position.pos,
+					camera_pos,
+					camera_rot,
+					1.,
+				)?;
 				let real_scene = state.get_scene(&scene.scene).unwrap();
 
 				let mut animation_states = HashMap::new();
@@ -3660,10 +3726,15 @@ impl Map
 			{
 				if time_left > 0.5
 				{
+					if time_left.ceil() == 12. && !self.countdown_started
+					{
+						state.sfx.play_sound_fixed("data/countdown.ogg")?;
+						self.countdown_started = true;
+					}
 					if state.hs.time > self.next_self_destruct_message
 					{
 						self.messages.add(
-							&format!("Self destruct in {} seconds!", time_left.round() as i32),
+							&format!("Self destruct in {} seconds!", time_left.ceil() as i32),
 							state.hs.time,
 						);
 						if time_left < 10.
@@ -3738,7 +3809,7 @@ impl Map
 								{
 									ai.state = comps::AIState::Attacking(owner);
 									state.sfx.play_positional_sound_3d(
-										"data/notice.ogg",
+										&ai.robot_desc.ai.notice_sound,
 										position.pos.into(),
 										camera_pos,
 										camera_rot,
@@ -3870,6 +3941,13 @@ impl Map
 						}
 						if let Some(src_pos) = src_pos
 						{
+							state.sfx.play_positional_sound_3d(
+								"data/explosion.ogg",
+								src_pos,
+								camera_pos,
+								camera_rot,
+								1.,
+							)?;
 							spawn_explosion(src_pos, kind, &mut self.world, state)?;
 						}
 					}
@@ -3882,6 +3960,14 @@ impl Map
 						}
 						if let Some(src_pos) = src_pos
 						{
+							state.sfx.play_positional_sound_3d(
+								"data/black_hole.ogg",
+								src_pos,
+								camera_pos,
+								camera_rot,
+								1.,
+							)?;
+
 							spawn_black_hole(src_pos, &mut self.world, state)?;
 						}
 					}
@@ -3889,9 +3975,14 @@ impl Map
 					{
 						let mut query = self
 							.world
-							.query_one::<(&mut comps::Door, &mut comps::Scene, &comps::Physics)>(id)
+							.query_one::<(
+								&comps::Position,
+								&mut comps::Door,
+								&mut comps::Scene,
+								&comps::Physics,
+							)>(id)
 							.unwrap();
-						if let Some((door, scene, physics)) = query.get()
+						if let Some((position, door, scene, physics)) = query.get()
 						{
 							let actor_id = other_id.and_then(|other_id| {
 								self.world
@@ -3904,6 +3995,7 @@ impl Map
 							{
 								if actor_id == Some(self.player)
 								{
+									state.sfx.play_sound("data/error.ogg")?;
 									self.messages.add("This door is locked.", state.hs.time);
 								}
 								// Don't open on touch.
@@ -3918,6 +4010,7 @@ impl Map
 								}
 								else if actor_id == Some(self.player)
 								{
+									state.sfx.play_sound("data/error.ogg")?;
 									self.messages
 										.add(&format!("{} key required!", key), state.hs.time);
 								}
@@ -3936,6 +4029,13 @@ impl Map
 
 							if can_open
 							{
+								state.sfx.play_positional_sound_3d(
+									"data/open.ogg",
+									position.pos,
+									camera_pos,
+									camera_rot,
+									1.,
+								)?;
 								let real_scene = state.get_scene(&scene.scene).unwrap();
 
 								let mut animation_states = HashMap::new();
@@ -4025,6 +4125,8 @@ impl Map
 					}
 					comps::Effect::StartSelfDestruct =>
 					{
+						state.sfx.play_sound_fixed("data/self_destruct.ogg")?;
+
 						self.self_destruct_start = Some(state.hs.time);
 						self.next_self_destruct_message = state.hs.time;
 					}
@@ -4102,6 +4204,7 @@ impl Map
 						{
 							if other_id == self.player
 							{
+								state.sfx.play_sound("data/item.ogg")?;
 								self.messages
 									.add(&format!("Got {}", kind.to_string()), state.hs.time);
 								match kind

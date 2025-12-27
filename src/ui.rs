@@ -571,7 +571,7 @@ impl InGameMenu
 				&[ui::Widget::Button(ui::Button::new(
 					w,
 					h,
-					"Save and Quit",
+					"Quit",
 					Action::MainMenu,
 					THEME.clone(),
 				))],
