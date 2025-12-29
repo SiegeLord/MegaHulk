@@ -120,83 +120,192 @@ pub fn new_game_controls() -> controls::Controls<Action>
 	let mut action_to_inputs = BTreeMap::new();
 	action_to_inputs.insert(
 		Action::MoveLeft,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::A)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::A)),
+			Some(controls::Input::JoystickNegAxis(
+				JoystickStick::LeftThumb,
+				0,
+			)),
+		],
 	);
 	action_to_inputs.insert(
 		Action::MoveRight,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::D)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::D)),
+			Some(controls::Input::JoystickPosAxis(
+				JoystickStick::LeftThumb,
+				0,
+			)),
+		],
 	);
 	action_to_inputs.insert(
 		Action::MoveUp,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::W)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::W)),
+			Some(controls::Input::JoystickNegAxis(
+				JoystickStick::LeftThumb,
+				1,
+			)),
+		],
 	);
 	action_to_inputs.insert(
 		Action::MoveDown,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::S)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::S)),
+			Some(controls::Input::JoystickPosAxis(
+				JoystickStick::LeftThumb,
+				1,
+			)),
+		],
 	);
-	action_to_inputs.insert(Action::RotateLeft, [Some(controls::Input::MouseXNeg), None]);
+	action_to_inputs.insert(
+		Action::RotateLeft,
+		[
+			Some(controls::Input::MouseXNeg),
+			Some(controls::Input::JoystickNegAxis(
+				JoystickStick::RightThumb,
+				0,
+			)),
+		],
+	);
 	action_to_inputs.insert(
 		Action::RotateRight,
-		[Some(controls::Input::MouseXPos), None],
+		[
+			Some(controls::Input::MouseXPos),
+			Some(controls::Input::JoystickPosAxis(
+				JoystickStick::RightThumb,
+				0,
+			)),
+		],
 	);
-	action_to_inputs.insert(Action::RotateUp, [Some(controls::Input::MouseYPos), None]);
-	action_to_inputs.insert(Action::RotateDown, [Some(controls::Input::MouseYNeg), None]);
+	action_to_inputs.insert(
+		Action::RotateUp,
+		[
+			Some(controls::Input::MouseYPos),
+			Some(controls::Input::JoystickPosAxis(
+				JoystickStick::RightThumb,
+				1,
+			)),
+		],
+	);
+	action_to_inputs.insert(
+		Action::RotateDown,
+		[
+			Some(controls::Input::MouseYNeg),
+			Some(controls::Input::JoystickNegAxis(
+				JoystickStick::RightThumb,
+				1,
+			)),
+		],
+	);
 	action_to_inputs.insert(
 		Action::RollLeft,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::Q)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::Q)),
+			Some(controls::Input::JoystickPosAxis(
+				JoystickStick::LeftTrigger,
+				0,
+			)),
+		],
 	);
 	action_to_inputs.insert(
 		Action::RollRight,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::E)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::E)),
+			Some(controls::Input::JoystickPosAxis(
+				JoystickStick::RightTrigger,
+				0,
+			)),
+		],
 	);
 
 	action_to_inputs.insert(
 		Action::GripLeft,
-		[Some(controls::Input::MouseButton(1)), None],
+		[
+			Some(controls::Input::MouseButton(1)),
+			Some(controls::Input::JoystickButton(
+				JoystickButton::LeftShoulder,
+			)),
+		],
 	);
 	action_to_inputs.insert(
 		Action::GripRight,
-		[Some(controls::Input::MouseButton(2)), None],
+		[
+			Some(controls::Input::MouseButton(2)),
+			Some(controls::Input::JoystickButton(
+				JoystickButton::RightShoulder,
+			)),
+		],
 	);
 	action_to_inputs.insert(
 		Action::Enrage,
 		[
 			Some(controls::Input::Keyboard(allegro::KeyCode::Space)),
-			None,
+			Some(controls::Input::JoystickButton(JoystickButton::B)),
 		],
 	);
 
 	action_to_inputs.insert(
 		Action::Map,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::Tab)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::Tab)),
+			Some(controls::Input::JoystickButton(JoystickButton::A)),
+		],
 	);
 
-	action_to_inputs.insert(Action::ZoomIn, [Some(controls::Input::MouseZPos), None]);
-	action_to_inputs.insert(Action::ZoomOut, [Some(controls::Input::MouseZNeg), None]);
+	action_to_inputs.insert(
+		Action::ZoomIn,
+		[
+			Some(controls::Input::MouseZPos),
+			Some(controls::Input::JoystickButton(JoystickButton::LeftThumb)),
+		],
+	);
+	action_to_inputs.insert(
+		Action::ZoomOut,
+		[
+			Some(controls::Input::MouseZNeg),
+			Some(controls::Input::JoystickButton(JoystickButton::RightThumb)),
+		],
+	);
 
 	action_to_inputs.insert(
 		Action::SelectNormal,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::_1)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::_1)),
+			Some(controls::Input::JoystickPosAxis(JoystickStick::DPad, 1)),
+		],
 	);
 	action_to_inputs.insert(
 		Action::SelectExplode,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::_2)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::_2)),
+			Some(controls::Input::JoystickNegAxis(JoystickStick::DPad, 0)),
+		],
 	);
 	action_to_inputs.insert(
 		Action::SelectPlasma,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::_3)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::_3)),
+			Some(controls::Input::JoystickNegAxis(JoystickStick::DPad, 1)),
+		],
 	);
 	action_to_inputs.insert(
 		Action::SelectBlackHole,
-		[Some(controls::Input::Keyboard(allegro::KeyCode::_4)), None],
+		[
+			Some(controls::Input::Keyboard(allegro::KeyCode::_4)),
+			Some(controls::Input::JoystickPosAxis(JoystickStick::DPad, 0)),
+		],
 	);
 
-	controls::Controls::new(action_to_inputs)
+	let mut ret = controls::Controls::new(action_to_inputs);
+	ret.thumb_dead_zone = 0.01;
+	ret
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Options
 {
+	pub version: String,
 	pub gfx: hack_state::GfxOptions,
 
 	pub play_music: bool,
@@ -211,6 +320,7 @@ impl Default for Options
 	fn default() -> Self
 	{
 		Self {
+			version: VERSION.to_string(),
 			gfx: hack_state::GfxOptions {
 				fullscreen: true,
 				width: 960,
@@ -221,8 +331,8 @@ impl Default for Options
 				frac_scale: true,
 			},
 			play_music: true,
-			sfx_volume: 1.,
-			music_volume: 1.,
+			sfx_volume: 0.5,
+			music_volume: 0.5,
 			fov: 70.,
 			controls: new_game_controls(),
 		}
@@ -279,7 +389,7 @@ pub struct GameState
 
 pub fn load_options(core: &Core) -> Result<Options>
 {
-	Ok(utils::load_user_data(core, "options.cfg")?.unwrap_or_default())
+	Ok(utils::load_user_data_with_version(core, "options.cfg", VERSION)?.unwrap_or_default())
 }
 
 pub fn save_options(core: &Core, options: &Options) -> Result<()>
@@ -303,7 +413,7 @@ impl GameState
 		//sfx.set_music_file("data/lemonade-sinus.xm");
 		//sfx.play_music()?;
 
-		let controls = controls::ControlsHandler::new(options.controls.clone());
+		let controls = controls::ControlsHandler::new(options.controls.clone(), 0.01);
 		Ok(Self {
 			options: options,
 			bitmaps: HashMap::new(),

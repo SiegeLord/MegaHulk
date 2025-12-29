@@ -1232,7 +1232,8 @@ checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
 
 [[package]]
 name = "slhack"
-version = "0.2.0"
+version = "0.3.0"
+source = "git+https://github.com/SiegeLord/HackInit.git?rev=719094430d5865f61836a61e980b88a32f0c9309#719094430d5865f61836a61e980b88a32f0c9309"
 dependencies = [
  "allegro",
  "allegro-sys",

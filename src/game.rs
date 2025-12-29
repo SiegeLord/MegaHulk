@@ -1927,6 +1927,12 @@ struct Map
 	countdown_started: bool,
 	flash_time: f64,
 	flash_color: Color,
+	old_want_enrage: bool,
+	old_want_normal: bool,
+	old_want_plasma: bool,
+	old_want_explode: bool,
+	old_want_black_hole: bool,
+	old_want_gripers: [bool; 2],
 }
 
 impl Map
@@ -2006,6 +2012,12 @@ impl Map
 			allow_cinematic_skip: false,
 			flash_time: -10.,
 			flash_color: Color::from_rgb_f(0., 0., 0.),
+			old_want_enrage: false,
+			old_want_normal: false,
+			old_want_plasma: false,
+			old_want_explode: false,
+			old_want_black_hole: false,
+			old_want_gripers: [false; 2],
 		})
 	}
 
@@ -2059,38 +2071,24 @@ impl Map
 				.controls
 				.get_action_state(game_state::Action::RollRight);
 		let want_enrage = state.controls.get_action_state(game_state::Action::Enrage) > 0.5;
-		state
-			.controls
-			.clear_action_state(game_state::Action::Enrage);
 
 		let want_normal = state
 			.controls
 			.get_action_state(game_state::Action::SelectNormal)
 			> 0.5;
-		state
-			.controls
-			.clear_action_state(game_state::Action::SelectNormal);
 		let want_plasma = state
 			.controls
 			.get_action_state(game_state::Action::SelectPlasma)
 			> 0.5;
-		state
-			.controls
-			.clear_action_state(game_state::Action::SelectPlasma);
 		let want_black_hole = state
 			.controls
 			.get_action_state(game_state::Action::SelectBlackHole)
 			> 0.5;
-		state
-			.controls
-			.clear_action_state(game_state::Action::SelectBlackHole);
 		let want_explode = state
 			.controls
 			.get_action_state(game_state::Action::SelectExplode)
 			> 0.5;
-		state
-			.controls
-			.clear_action_state(game_state::Action::SelectExplode);
+		let mut want_gripper = [false; 2];
 
 		let mut player_position = None;
 		if self.world.contains(self.player)
@@ -2121,19 +2119,19 @@ impl Map
 				controller.want_move = Vector3::new(right_left, up_down, 0.);
 				controller.want_rotate =
 					Vector3::new(-rot_up_down, -rot_right_left, roll_left_right);
-				controller.want_enrage = want_enrage;
+				controller.want_enrage = want_enrage && !self.old_want_enrage;
 
-				controller.want_normal = want_normal;
-				controller.want_plasma = want_plasma;
-				controller.want_black_hole = want_black_hole;
-				controller.want_explode = want_explode;
+				controller.want_normal = want_normal && !self.old_want_normal;
+				controller.want_plasma = want_plasma && !self.old_want_plasma;
+				controller.want_black_hole = want_black_hole && !self.old_want_black_hole;
+				controller.want_explode = want_explode && !self.old_want_explode;
 
 				for (idx, action) in [game_state::Action::GripLeft, game_state::Action::GripRight]
 					.iter()
 					.enumerate()
 				{
-					controller.want_gripper[idx] = state.controls.get_action_state(*action) > 0.5;
-					state.controls.clear_action_state(*action);
+					want_gripper[idx] = state.controls.get_action_state(*action) > 0.5;
+					controller.want_gripper[idx] = want_gripper[idx] && !self.old_want_gripers[idx];
 				}
 			}
 
@@ -2277,6 +2275,13 @@ impl Map
 				self.level_map.dirty = true;
 			}
 		}
+		self.old_want_enrage = want_enrage;
+		self.old_want_normal = want_normal;
+		self.old_want_plasma = want_plasma;
+		self.old_want_explode = want_explode;
+		self.old_want_black_hole = want_black_hole;
+		self.old_want_gripers = want_gripper;
+
 		if self.map_state != MapState::Interactive
 		{
 			if !self.allow_cinematic_skip
@@ -3075,6 +3080,13 @@ impl Map
 			{
 				if controller.want_enrage
 				{
+					state.sfx.play_positional_sound_3d(
+						"data/bullet_hit.ogg",
+						position.pos.into(),
+						camera_pos,
+						camera_rot,
+						1.,
+					)?;
 					health.health -= 10.;
 					health.damage_time = state.hs.time;
 					grippers.last_kill_time = state.hs.time;
@@ -3882,7 +3894,7 @@ impl Map
 								{
 									if test_collider_handle == collider_handle
 									{
-										let frac = 1.0 - diff.norm() / radius;
+										let frac = (1.0 - diff.norm() / radius).max(0.);
 										new_effects.push((
 											comps::Effect::Damage {
 												amount: amount * frac,

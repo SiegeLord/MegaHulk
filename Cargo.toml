@@ -8,8 +8,8 @@ build = "build.rs"
 
 [dependencies]
 
-slhack = { path = "/home/siege/Projects/HackInit/slhack" }
-#slhack = { git = "https://github.com/SiegeLord/HackInit.git" }
+#slhack = { path = "/home/siege/Projects/HackInit/slhack" }
+slhack = { git = "https://github.com/SiegeLord/HackInit.git", rev = "719094430d5865f61836a61e980b88a32f0c9309" }
 
 allegro-sys = { version="0.0.50" }
 allegro = { version="0.0.50", features = ["unstable"] }

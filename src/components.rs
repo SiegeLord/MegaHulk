@@ -902,7 +902,7 @@ impl StatValues
 	{
 		Self {
 			speed: 16.,
-			rot_speed: 10.,
+			rot_speed: 25.,
 		}
 	}
 
