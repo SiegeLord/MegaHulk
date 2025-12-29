@@ -2,13 +2,13 @@
 
 # Plot
 
-You are a robot that is sent to recover gifts from extraterrestial mines.
+You are a robot that is sent to recover gifts from extraterrestrial mines.
 
 # Gameplay Hints
 
 - Look at the controls menu for the controls!
 - Look at the map if you're lost.
-- You can maintain your kill stream by pressing the Enrage key at the cost of
+- You can maintain your kill streak by pressing the Enrage key at the cost of
   health!
 - Hit the enemy center for more damage.
 
