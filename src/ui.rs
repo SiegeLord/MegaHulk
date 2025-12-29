@@ -598,6 +598,8 @@ pub enum SubScreen
 	OptionsMenu(OptionsMenu),
 	InGameMenu(InGameMenu),
 	Story(Story),
+	Intermission(Intermission),
+	Epilogue(Epilogue),
 }
 
 impl SubScreen
@@ -611,6 +613,8 @@ impl SubScreen
 			SubScreen::OptionsMenu(s) => s.draw(state),
 			SubScreen::InGameMenu(s) => s.draw(state),
 			SubScreen::Story(s) => s.draw(state),
+			SubScreen::Intermission(s) => s.draw(state),
+			SubScreen::Epilogue(s) => s.draw(state),
 		}
 	}
 
@@ -623,6 +627,8 @@ impl SubScreen
 			SubScreen::OptionsMenu(s) => s.input(state, event),
 			SubScreen::InGameMenu(s) => s.input(state, event),
 			SubScreen::Story(s) => s.input(state, event),
+			SubScreen::Intermission(s) => s.input(state, event),
+			SubScreen::Epilogue(s) => s.input(state, event),
 		}
 	}
 
@@ -635,6 +641,8 @@ impl SubScreen
 			SubScreen::OptionsMenu(s) => s.resize(state),
 			SubScreen::InGameMenu(s) => s.resize(state),
 			SubScreen::Story(s) => s.resize(state),
+			SubScreen::Intermission(s) => s.resize(state),
+			SubScreen::Epilogue(s) => s.resize(state),
 		}
 	}
 }
@@ -729,17 +737,28 @@ fn mps_to_kph(mps: f32) -> f32
 	mps / 1000. * 3600.
 }
 
-pub struct IntermissionMenu
+pub struct Intermission
 {
 	widgets: ui::WidgetList<Action>,
 }
 
-impl IntermissionMenu
+impl Intermission
 {
-	pub fn new(map_stats: &MapStats, state: &game_state::GameState) -> Result<Self>
+	pub fn new(
+		map_stats: &MapStats, state: &game_state::GameState, have_next_mission: bool,
+	) -> Result<Self>
 	{
 		let w = BUTTON_WIDTH;
 		let h = BUTTON_HEIGHT;
+
+		let button_action = if have_next_mission
+		{
+			Action::Start
+		}
+		else
+		{
+			Action::Forward(|s| Ok(SubScreen::Epilogue(Epilogue::new(s))))
+		};
 
 		let mut widgets = vec![];
 
@@ -922,7 +941,7 @@ impl IntermissionMenu
 				w,
 				h,
 				"Continue",
-				Action::Start,
+				button_action,
 				THEME.clone(),
 			))],
 		]);
@@ -977,7 +996,8 @@ impl Story
 			"Christmas requires gifts, so we are sending you, MEGAHULK ",
 			"to retrive them.",
 			"",
-			"Let the booms of your punches replace the silence of the ELVES.",
+			"We can teleport you inside, but the mines are sealed.",
+			"Destroy the reactor to open the emergency exit.",
 			"",
 		];
 
@@ -993,22 +1013,84 @@ impl Story
 				THEME.clone(),
 			))]);
 		}
-		widgets.push(vec![
-			ui::Widget::Button(ui::Button::new(
-				w,
-				h,
-				"MEGAHULK",
-				Action::Start,
+		widgets.push(vec![ui::Widget::Button(ui::Button::new(
+			w,
+			h,
+			"Activate the Teleporter...",
+			Action::Start,
+			THEME.clone(),
+		))]);
+		let mut res = Self {
+			widgets: ui::WidgetList::new(
+				&widgets.iter().map(|r| &r[..]).collect::<Vec<_>>(),
 				THEME.clone(),
-			)),
-			ui::Widget::Button(ui::Button::new(
-				w,
+			),
+		};
+		res.resize(state);
+		res
+	}
+
+	pub fn draw(&self, state: &game_state::GameState)
+	{
+		self.widgets.draw(&state.hs);
+	}
+
+	pub fn input(&mut self, state: &mut game_state::GameState, event: &Event) -> Option<Action>
+	{
+		self.widgets.input(event, &mut state.sfx, &mut state.hs)
+	}
+
+	pub fn resize(&mut self, state: &game_state::GameState)
+	{
+		let cx = state.hs.buffer_width() / 2.;
+		let cy = state.hs.buffer_height() / 2. + 16.;
+
+		self.widgets.set_pos(Point2::new(cx, cy));
+		self.widgets.resize(&state.hs);
+	}
+}
+
+pub struct Epilogue
+{
+	widgets: ui::WidgetList<Action>,
+}
+
+impl Epilogue
+{
+	pub fn new(state: &game_state::GameState) -> Self
+	{
+		let w = BUTTON_WIDTH;
+		let h = BUTTON_HEIGHT;
+
+		let story = [
+			"It seemed impossible, a hulk bigger than the MEGAHULK...",
+			"a GIGAHULK?",
+			"",
+			"It is no longer important. All that matters is that ",
+			"Christmas is saved, the gifts are retrieved and all ",
+			"that remains in the charred remains of the mines ",
+			"is the silence of the robots and dead elves.",
+		];
+
+		let mut widgets = vec![];
+
+		for line in story
+		{
+			widgets.push(vec![ui::Widget::Label(ui::Label::new_align(
+				state.hs.buffer_width() - 2. * HORIZ_SPACE,
 				h,
-				"Too tired",
-				Action::Back,
+				line,
+				FontAlign::Left,
 				THEME.clone(),
-			)),
-		]);
+			))]);
+		}
+		widgets.push(vec![ui::Widget::Button(ui::Button::new(
+			w,
+			h,
+			"Return to Base",
+			Action::MainMenu,
+			THEME.clone(),
+		))]);
 		let mut res = Self {
 			widgets: ui::WidgetList::new(
 				&widgets.iter().map(|r| &r[..]).collect::<Vec<_>>(),

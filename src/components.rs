@@ -694,6 +694,7 @@ pub enum Effect
 	PickupItem
 	{
 		kind: ItemKind,
+		score: i32,
 	},
 	SpawnItem
 	{

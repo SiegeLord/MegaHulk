@@ -755,40 +755,40 @@ pub fn spawn_item(
 			Color::from_rgb_f(1., 1., 1.),
 			Some(Color::from_rgb_f(0., 0., 1.)),
 			None,
-			vec![
-				comps::Effect::PickupItem { kind: kind },
-				comps::Effect::AddToScore { amount: 100 },
-			],
+			vec![comps::Effect::PickupItem {
+				kind: kind,
+				score: 100,
+			}],
 		),
 		comps::ItemKind::Key { kind: key_kind } => (
 			"data/key.glb".to_string(),
 			key_kind.color(),
 			Some(key_kind.color()),
 			None,
-			vec![
-				comps::Effect::PickupItem { kind: kind },
-				comps::Effect::AddToScore { amount: 1000 },
-			],
+			vec![comps::Effect::PickupItem {
+				kind: kind,
+				score: 1000,
+			}],
 		),
 		comps::ItemKind::Gift => (
 			"data/gift.glb".to_string(),
 			Color::from_rgb_f(1., 1., 1.),
 			None,
 			Some(("data/gift_map.glb", Color::from_rgb_f(1., 0., 1.))),
-			vec![
-				comps::Effect::PickupItem { kind: kind },
-				comps::Effect::AddToScore { amount: 5000 },
-			],
+			vec![comps::Effect::PickupItem {
+				kind: kind,
+				score: 5000,
+			}],
 		),
 		comps::ItemKind::Ammo { kind: ammo_kind } => (
 			ammo_kind.scene_name().to_string(),
 			Color::from_rgb_f(1., 1., 1.),
 			Some(ammo_kind.color()),
 			None,
-			vec![
-				comps::Effect::PickupItem { kind: kind },
-				comps::Effect::AddToScore { amount: 200 },
-			],
+			vec![comps::Effect::PickupItem {
+				kind: kind,
+				score: 200,
+			}],
 		),
 	};
 	let real_scene = game_state::cache_scene(state, &scene_name)?;
@@ -877,7 +877,7 @@ pub fn spawn_player(
 	let mut map_scene = comps::MapScene::new(scene_name);
 	map_scene.explored = true;
 
-	let mut health = comps::Health::new(10000.);
+	let mut health = comps::Health::new(100.);
 	health.remove_on_death = false;
 	health.death_effects = vec![
 		comps::Effect::SpawnDeathCamera,
@@ -1989,12 +1989,13 @@ impl Map
 			screen_rectangle: make_rectangle(state.hs.display.as_mut().unwrap(), &state.hs.prim),
 			stats: MapStats::new(&level_desc),
 			level_desc: level_desc,
-			keys: [
-				comps::KeyKind::Red,
-				comps::KeyKind::Yellow,
-				comps::KeyKind::Blue,
-			]
-			.into(), // HashSet::new_,
+			// keys: [
+			// 	comps::KeyKind::Red,
+			// 	comps::KeyKind::Yellow,
+			// 	comps::KeyKind::Blue,
+			// ]
+			// .into(),
+			keys: HashSet::new(),
 			score: comps::NumberTracker::new(0),
 			map_state: MapState::Interactive,
 			messages: MessageTracker::new(),
@@ -2313,9 +2314,7 @@ impl Map
 						MapState::MineExplosionCinematic =>
 						{
 							state.hs.menu_controls.clear_action_states();
-							return Ok(Some(game_state::NextScreen::Menu {
-								ignore_first_mouse_up: true,
-							}));
+							return Ok(Some(game_state::NextScreen::Game));
 						}
 						MapState::DeathCinematic =>
 						{
@@ -3244,7 +3243,7 @@ impl Map
 							{
 								effects.push((
 									comps::Effect::AreaDamage {
-										amount: 100.,
+										amount: 200.,
 										radius: 4.,
 										owner: gripper.parent,
 									},
@@ -4228,17 +4227,15 @@ impl Map
 						self.world
 							.insert_one(id, comps::TimeToDie::new(state.hs.time + delay))?;
 					}
-					comps::Effect::PickupItem { kind } =>
+					comps::Effect::PickupItem { kind, score } =>
 					{
 						if let Some(other_id) = other_id
 						{
 							if other_id == self.player
 							{
-								if other_id == self.player
-								{
-									self.flash_time = state.hs.time;
-									self.flash_color = Color::from_rgba_f(0.0, 0.25, 0., 0.25);
-								}
+								self.score.add(score, state.hs.time);
+								self.flash_time = state.hs.time;
+								self.flash_color = Color::from_rgba_f(0.0, 0.25, 0., 0.25);
 								state.sfx.play_sound("data/item.ogg")?;
 								self.messages
 									.add(&format!("Got {}", kind.to_string()), state.hs.time);

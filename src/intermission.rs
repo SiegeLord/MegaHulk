@@ -11,7 +11,7 @@ use slhack::controls;
 
 pub struct Intermission
 {
-	intermission_menu: ui::IntermissionMenu,
+	subscreens: ui::SubScreens,
 }
 
 impl Intermission
@@ -26,8 +26,15 @@ impl Intermission
 			.sfx
 			.play_music("data/MegaHulk_Intermission.ogg", 0.5, &state.hs.core);
 
-		let intermission_menu = ui::IntermissionMenu::new(map_stats, state)?;
-		Ok(Self { intermission_menu })
+		let mut subscreens = ui::SubScreens::new(state);
+		subscreens.push(ui::SubScreen::Intermission(ui::Intermission::new(
+			map_stats,
+			state,
+			state.next_level_desc.is_some(),
+		)?));
+		Ok(Self {
+			subscreens: subscreens,
+		})
 	}
 
 	pub fn input(
@@ -46,22 +53,19 @@ impl Intermission
 			}
 			_ => (),
 		}
-		if let Some(action) = self.intermission_menu.input(state, event)
+		if let Some(action) = self.subscreens.input(state, event)?
 		{
 			match action
 			{
 				ui::Action::Start =>
 				{
-					if state.next_level_desc.is_some()
-					{
-						return Ok(Some(game_state::NextScreen::Game));
-					}
-					else
-					{
-						return Ok(Some(game_state::NextScreen::Menu {
-							ignore_first_mouse_up: false,
-						}));
-					}
+					return Ok(Some(game_state::NextScreen::Game));
+				}
+				ui::Action::MainMenu =>
+				{
+					return Ok(Some(game_state::NextScreen::Menu {
+						ignore_first_mouse_up: false,
+					}));
 				}
 				_ => (),
 			}
@@ -91,13 +95,13 @@ impl Intermission
 			)
 			.ok();
 
-		state.hs.core.clear_to_color(Color::from_rgb_f(0., 0., 0.5));
-		self.intermission_menu.draw(state);
+		state.hs.core.clear_to_color(Color::from_rgb_f(0., 0., 0.));
+		self.subscreens.draw(state);
 		Ok(())
 	}
 
 	pub fn resize(&mut self, state: &game_state::GameState)
 	{
-		self.intermission_menu.resize(state);
+		self.subscreens.resize(state);
 	}
 }

@@ -28,7 +28,7 @@ void main()
     float specular_dot = pow(max(dot(reflect(-ray_dir, normal), camera_dir), 0.), 20.);
 
     vec3 diff = (light_pos - pos) / light_intensity;
-    float dist_sq = 10000. * dot(diff, diff);
+    float dist_sq = 5000. * dot(diff, diff);
     float dist_frac = 1 / (1 + dist_sq);
     //color = vec4(light_color.xyz, 0.);
     
