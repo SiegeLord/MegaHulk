@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "MegaHulk"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "1.0.0"
 #define MyAppExeName "MegaHulk.exe"
 
 [Setup]
@@ -19,7 +19,7 @@ InfoBeforeFile=README.md
 ; Remove the following line to run in administrative install mode (install for all users.)
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-OutputDir=C:\dev\MegaHulk_Src
+OutputDir={#SourcePath}
 OutputBaseFilename=Setup MegaHulk v{#MyAppVersion}
 SetupIconFile=data\icon.ico
 Compression=lzma
