@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "MegaHulk"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "allegro",
  "allegro-sys",
@@ -1155,6 +1155,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "semver"
+version = "1.0.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1233,7 +1239,7 @@ checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
 [[package]]
 name = "slhack"
 version = "0.3.0"
-source = "git+https://github.com/SiegeLord/HackInit.git?rev=719094430d5865f61836a61e980b88a32f0c9309#719094430d5865f61836a61e980b88a32f0c9309"
+source = "git+https://github.com/SiegeLord/HackInit.git?rev=a1f234ad1e3cda4a9ea45a582885b4542936ff38#a1f234ad1e3cda4a9ea45a582885b4542936ff38"
 dependencies = [
  "allegro",
  "allegro-sys",
@@ -1253,6 +1259,7 @@ dependencies = [
  "nalgebra",
  "rand 0.8.5",
  "rect_packer",
+ "semver",
  "serde",
  "serde_derive",
  "serde_json",
