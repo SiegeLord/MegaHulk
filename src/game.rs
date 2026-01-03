@@ -483,7 +483,7 @@ pub fn spawn_reactor(
 	let scene_name = "data/reactor.glb";
 	let scene = game_state::cache_scene(state, scene_name)?;
 
-	let mut health = comps::Health::new(35.);
+	let mut health = comps::Health::new(250.);
 	health.remove_on_death = false;
 	health.death_effects = vec![
 		comps::Effect::ExplosionSpawner {
